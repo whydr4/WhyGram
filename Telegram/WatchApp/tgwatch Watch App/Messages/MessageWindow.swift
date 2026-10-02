@@ -38,14 +38,17 @@ struct MessageWindow: Equatable {
     }
 
     /// The row id the view should scroll to on first `.loaded` render. Returns
-    /// the unread-divider row id ("unread-<dividerAnchor>") when the divider is
-    /// set AND the loaded cache contains at least one message above the divider.
-    /// Returns nil otherwise — caller falls back to scrolling the last row to
-    /// `.bottom`.
+    /// the unread-divider row id ("unread-<dividerAnchor>") only when the divider
+    /// falls inside the loaded window: at least one read message (id <= divider)
+    /// and one unread message (id > divider) are cached. When every cached
+    /// message is unread, the divider's real position is older than the window
+    /// and its row would render at the very top, so return nil and let the caller
+    /// scroll the last row to `.bottom`.
     var initialScrollTargetId: String? {
         guard let divider = unreadDividerAfterId else { return nil }
         let hasAnyUnread = cache.keys.contains { $0 > divider }
-        return hasAnyUnread ? "unread-\(divider)" : nil
+        let hasAnyRead = cache.keys.contains { $0 <= divider }
+        return hasAnyUnread && hasAnyRead ? "unread-\(divider)" : nil
     }
 
     // MARK: - Mutators

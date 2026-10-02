@@ -21,9 +21,9 @@ struct MessageListView: View {
     // True when the user is parked within slop of the bottom edge. Updated only on
     // user-driven scrolls (see .onScrollGeometryChange filter), so it reflects intent
     // rather than instantaneous viewport position. Drives auto-scroll for incoming:
-    // stay-anchored-when-at-bottom, leave-alone-when-scrolled-up. Initial value depends
-    // on whether the chat opens at the tail (no unreads → true) or at the unread divider
-    // (unreads present → false, user is parked at the divider, not the bottom).
+    // stay-anchored-when-at-bottom, leave-alone-when-scrolled-up. Chats open at the
+    // tail, so this starts true; the initial-position `.task` sets it to false when the
+    // view lands on the unread divider instead of the bottom.
     @State private var isAtBottom: Bool
     @State private var didApplyInitialScroll: Bool = false
     // Live scroll-view content height, updated by a dedicated geometry observer
@@ -48,8 +48,8 @@ struct MessageListView: View {
     init(row: ChatRow, store: ChatHistoryStore) {
         self.row = row
         self._store = State(initialValue: store)
-        // Opens at tail → starts at bottom. Opens at divider → user is NOT at bottom.
-        self._isAtBottom = State(initialValue: row.unreadCount == 0)
+        // Fork: chats always open at the tail → starts at bottom.
+        self._isAtBottom = State(initialValue: true)
     }
 
     var body: some View {
@@ -349,6 +349,9 @@ struct MessageListView: View {
                         applyInitialPosition()
                         await Task.yield()
                         applyInitialPosition()
+                        // Parked on the unread divider → not at the bottom, so incoming
+                        // messages must not pull the list down past what the user is reading.
+                        isAtBottom = store.window.initialScrollTargetId == nil
                         didApplyInitialScroll = true
                     }
                     .onChange(of: store.rows.first?.id) { oldId, newId in

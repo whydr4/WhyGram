@@ -83,15 +83,11 @@ final class ChatHistoryStore {
         self.coalesceUpdates = coalesceUpdates
         self.unreadDividerAfterIdSnapshot = lastReadInboxMessageId
         self.lastReadOutboxMessageId = lastReadOutboxMessageId
-        let anchor: MessageWindow.Anchor
-        let dividerAfter: Int64?
-        if unreadCount > 0 {
-            anchor = .messageId(lastReadInboxMessageId)
-            dividerAfter = lastReadInboxMessageId
-        } else {
-            anchor = .tail
-            dividerAfter = nil
-        }
+        // Fork: always open at the chat tail so the newest messages load first.
+        // The unread divider is kept; the view lands on it only when it falls
+        // inside the loaded window (see `MessageWindow.initialScrollTargetId`).
+        let anchor: MessageWindow.Anchor = .tail
+        let dividerAfter: Int64? = unreadCount > 0 ? lastReadInboxMessageId : nil
         self.window = MessageWindow(
             anchor: anchor,
             halfLimit: Self.halfLimit,
