@@ -172,10 +172,27 @@ final class ChatHistoryStore {
     /// → up to (halfLimit+1) newer + divider + ~(halfLimit-1) older. Otherwise we
     /// fetch from the tail with offset 0. Loop retries on the same anchor up to
     /// 10× (TDLib returns < requested on cold cache).
+    ///
+    /// A tail-anchored fill first asks TDLib's local database (no network). The
+    /// local batch is kept only if it reaches the chat's last message; a stale
+    /// cache that stops short would leave a gap below it, so it is discarded and
+    /// the network loop fills the window from the tail as before. Rows are
+    /// projected once at the end: the spinner covers the whole initial load, so
+    /// per-iteration projections were never visible.
     private func loadInitialWindow() async throws {
         let targetCount = 2 * Self.halfLimit
         let maxIterations = 10
         var iter = 0
+        if case .tail = window.anchor, window.cache.isEmpty, let tailId = chatTailIdAtOpen {
+            let local = (try? await loader.loadLocalHistory(
+                chatId: chatId, fromMessageId: 0, offset: 0, limit: targetCount
+            )) ?? []
+            logger.info("loadInitialWindow local returned=\(local.count, privacy: .public)")
+            if let localHighest = local.map(\.id).max(), localHighest >= tailId {
+                for m in local { primeFiles(from: m.content) }
+                window.extendInitial(local.map(CachedMessage.init), chatTailId: chatTailIdAtOpen)
+            }
+        }
         while !Task.isCancelled, iter < maxIterations, window.cache.count < targetCount {
             iter += 1
             let from: Int64
@@ -217,8 +234,8 @@ final class ChatHistoryStore {
             // messages in descending id order. Mark `reachesChatTail` so live
             // `updateNewMessage` can extend the window without spurious gap probes.
             if case .tail = window.anchor, from == 0 { window.markReachesChatTail() }
-            reproject()
         }
+        reproject()
     }
 
     func stop() async {
