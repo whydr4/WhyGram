@@ -20,6 +20,11 @@ protocol ChatHistoryLoader: Sendable {
     /// NEWER than fromMessageId — used for the open-at-unread anchor fetch and
     /// for newer-direction pagination. Mirrors TDLib's `getChatHistory` semantics.
     func loadHistory(chatId: Int64, fromMessageId: Int64, offset: Int, limit: Int) async throws -> [Message]
+    /// Same contract as `loadHistory`, but served only from TDLib's local database
+    /// (`onlyLocal: true`) with no network round-trip. May return fewer messages
+    /// than requested, or none. The default implementation returns `[]`, so
+    /// loaders without a local cache always fall through to `loadHistory`.
+    func loadLocalHistory(chatId: Int64, fromMessageId: Int64, offset: Int, limit: Int) async throws -> [Message]
     func downloadFile(fileId: Int, priority: Int) async throws -> File
     func cancelDownloadFile(fileId: Int) async throws
     func sendText(chatId: Int64, text: String) async throws -> Message
@@ -37,6 +42,12 @@ protocol ChatHistoryLoader: Sendable {
     func sendSticker(chatId: Int64, remoteFileId: String, emoji: String, width: Int, height: Int) async throws -> Message
     /// Sends the given coordinate as a static location message (`livePeriod` 0).
     func sendLocation(chatId: Int64, latitude: Double, longitude: Double) async throws -> Message
+}
+
+extension ChatHistoryLoader {
+    func loadLocalHistory(chatId: Int64, fromMessageId: Int64, offset: Int, limit: Int) async throws -> [Message] {
+        []
+    }
 }
 
 struct TDLibChatHistoryLoader: ChatHistoryLoader {
@@ -61,7 +72,18 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
             chatId: chatId,
             fromMessageId: fromMessageId,
             offset: offset,
-            limit: limit
+            limit: limit,
+            onlyLocal: false
+        )
+    }
+
+    func loadLocalHistory(chatId: Int64, fromMessageId: Int64, offset: Int, limit: Int) async throws -> [Message] {
+        try await loadHistoryResilient(
+            chatId: chatId,
+            fromMessageId: fromMessageId,
+            offset: offset,
+            limit: limit,
+            onlyLocal: true
         )
     }
 
@@ -69,14 +91,15 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
         chatId: Int64,
         fromMessageId: Int64,
         offset: Int,
-        limit: Int
+        limit: Int,
+        onlyLocal: Bool
     ) async throws -> [Message] {
         let query = GetChatHistory(
             chatId: chatId,
             fromMessageId: fromMessageId,
             limit: limit,
             offset: offset,
-            onlyLocal: false
+            onlyLocal: onlyLocal
         )
         let dto = DTO(query, encoder: client.encoder)
         let data: Data = try await withCheckedThrowingContinuation { continuation in
