@@ -88,25 +88,37 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
                 continuation.resume(throwing: error)
             }
         }
-        return decodeMessagesLeniently(data, chatId: chatId)
+        return try decodeMessagesLeniently(data, chatId: chatId)
     }
 
-    private func decodeMessagesLeniently(_ data: Data, chatId: Int64) -> [Message] {
+    /// Decodes a `getChatHistory` response one message at a time, skipping any
+    /// message TDLibKit can't model. A TDLib `error` response or a malformed body
+    /// is thrown rather than collapsed to `[]`: callers treat an empty page as
+    /// "no more history", so swallowing a transient failure (e.g. a timeout while
+    /// the watch moves between the phone proxy and Wi-Fi/LTE) would permanently
+    /// mark the window as exhausted and bypass the store's retry handling.
+    private func decodeMessagesLeniently(_ data: Data, chatId: Int64) throws -> [Message] {
         let logger = Logger(subsystem: "org.telegram.TelegramWatch", category: "chathistory")
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — response was not JSON object")
-            return []
+            throw TDError(code: 500, message: "Malformed getChatHistory response")
         }
         if let type = json["@type"] as? String, type == "error" {
             logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — TDLib error response: \(String(describing: json), privacy: .public)")
-            return []
+            throw TDError(
+                code: json["code"] as? Int ?? 500,
+                message: json["message"] as? String ?? "getChatHistory failed"
+            )
         }
-        guard let rawMessages = json["messages"] as? [[String: Any]] else {
-            return []
+        guard let rawMessages = json["messages"] as? [Any] else {
+            logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — response has no messages array")
+            throw TDError(code: 500, message: "Malformed getChatHistory response")
         }
         var decoded: [Message] = []
         decoded.reserveCapacity(rawMessages.count)
-        for (idx, raw) in rawMessages.enumerated() {
+        for (idx, entry) in rawMessages.enumerated() {
+            // TDLib documents that `messages` entries may be null; skip them.
+            guard let raw = entry as? [String: Any] else { continue }
             // Re-serialize each message dict to Data so TDLibKit's decoder can
             // consume it the same way it would the full Messages response.
             guard let perMessageData = try? JSONSerialization.data(withJSONObject: raw) else {
