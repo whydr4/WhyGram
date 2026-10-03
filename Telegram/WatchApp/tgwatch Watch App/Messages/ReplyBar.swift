@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ReplyBar: View {
+    /// The double-tap gesture opens the reply field.
+    var primaryActionEnabled = false
     let onAttachTap: () -> Void
     let onSend: (String) -> Void
 
@@ -52,6 +54,7 @@ struct ReplyBar: View {
                 onSend(snapshot)
             }
             .buttonStyle(.plain)
+            .handGestureShortcut(.primaryAction, isEnabled: primaryActionEnabled)
             .layoutPriority(1)
             .accessibilityIdentifier("replyBar")
         }

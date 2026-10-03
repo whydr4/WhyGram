@@ -51,6 +51,13 @@ struct ChatRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            if row.unreadMentionCount > 0 {
+                Text("@")
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: 20, height: 20)
+                    .background(Circle().fill(Color.accentColor))
+                    .foregroundStyle(.white)
+            }
             if row.unreadCount > 0 {
                 Text("\(row.unreadCount)")
                     .font(.caption2)

@@ -53,6 +53,8 @@ struct MessageListView: View {
     @State private var scrollPosition = ScrollPosition()
     /// Bumped by the jump-to-bottom toolbar button; handled inside the ScrollViewReader.
     @State private var jumpToBottomRequest = 0
+    /// Bumped by the unread-mention toolbar button; handled inside the ScrollViewReader.
+    @State private var jumpToMentionRequest = 0
     /// Where each reply jump started, newest last. The jump-to-bottom button returns
     /// to these first, and goes to the bottom once they are used up.
     @State private var replyReturnStack: [ViewportAnchor] = []
@@ -87,16 +89,29 @@ struct MessageListView: View {
             }
             // In the system bottom bar: an overlay button over the chat never received
             // taps on the watch (confirmed with the on-device trace).
-            if showsJumpToBottom {
+            if showsJumpToBottom || store.unreadMentionCount > 0 {
                 ToolbarItemGroup(placement: .bottomBar) {
-                    Spacer()
-                    Button {
-                        jumpToBottomRequest += 1
-                    } label: {
-                        Image(systemName: "chevron.down")
+                    if store.unreadMentionCount > 0 {
+                        Button {
+                            jumpToMentionRequest += 1
+                        } label: {
+                            Text("@").font(.headline)
+                        }
+                        .overlay(alignment: .topTrailing) { countBadge(store.unreadMentionCount) }
+                        .accessibilityIdentifier("jumpToMention")
                     }
-                    .overlay(alignment: .topTrailing) { unseenBadge }
-                    .accessibilityIdentifier("jumpToBottom")
+                    Spacer()
+                    if showsJumpToBottom {
+                        Button {
+                            jumpToBottomRequest += 1
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .overlay(alignment: .topTrailing) { countBadge(newBelowCount + store.unseenNewerCount) }
+                        // Double tap (pinch twice): back down, the way the button goes.
+                        .handGestureShortcut(.primaryAction)
+                        .accessibilityIdentifier("jumpToBottom")
+                    }
                 }
             }
         }
@@ -315,6 +330,9 @@ struct MessageListView: View {
                             }
                             if row.canSend {
                                 ReplyBar(
+                                    // Double tap answers when the chat sits at its end;
+                                    // further up it goes back down (the down button).
+                                    primaryActionEnabled: !showsJumpToBottom,
                                     onAttachTap: { showAttachment = true },
                                     onSend: { snapshot in
                                         Task { await store.sendText(snapshot) }
@@ -499,6 +517,20 @@ struct MessageListView: View {
                             DebugTrace.log("prepend keep anchor=\(anchor.rowId) drift=\(drift.map { String(format: "%.1f", $0) } ?? "gone") visible=\(visibleRows.ids.count)")
                         }
                     }
+                    .onChange(of: jumpToMentionRequest) {
+                        Task {
+                            guard let messageId = await store.oldestUnreadMention() else { return }
+                            jumpToMessage(messageId, from: nil, proxy: proxy)
+                        }
+                    }
+                    .onChange(of: store.autoplayedMessageId) { _, messageId in
+                        // The next voice message started on its own: bring it into view,
+                        // unless the user is scrolling.
+                        guard let messageId, !visibleRows.isUserScrolling else { return }
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo("msg-\(messageId)", anchor: .center)
+                        }
+                    }
                     .onChange(of: jumpToBottomRequest) {
                         if let back = replyReturnStack.popLast() {
                             returnFromReply(to: back, proxy: proxy)
@@ -558,10 +590,9 @@ struct MessageListView: View {
     }
 
     @ViewBuilder
-    private var unseenBadge: some View {
-        let unseen = newBelowCount + store.unseenNewerCount
-        if unseen > 0 {
-            Text(unseen > 99 ? "99+" : "\(unseen)")
+    private func countBadge(_ count: Int) -> some View {
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 4)

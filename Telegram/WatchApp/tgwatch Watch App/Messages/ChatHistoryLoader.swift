@@ -50,6 +50,8 @@ protocol ChatHistoryLoader: Sendable {
     func messageProperties(chatId: Int64, messageId: Int64) async throws -> MessageProperties
     func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws
     func editMessageText(chatId: Int64, messageId: Int64, text: String) async throws
+    /// Ids of unread messages mentioning the user, newest first (up to `limit`).
+    func unreadMentionIds(chatId: Int64, limit: Int) async throws -> [Int64]
 }
 
 /// Thrown by loaders that don't implement an action (previews).
@@ -64,6 +66,7 @@ extension ChatHistoryLoader {
     func messageProperties(chatId: Int64, messageId: Int64) async throws -> MessageProperties { throw LoaderUnsupported() }
     func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws { throw LoaderUnsupported() }
     func editMessageText(chatId: Int64, messageId: Int64, text: String) async throws { throw LoaderUnsupported() }
+    func unreadMentionIds(chatId: Int64, limit: Int) async throws -> [Int64] { throw LoaderUnsupported() }
 }
 
 struct TDLibChatHistoryLoader: ChatHistoryLoader {
@@ -283,6 +286,10 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
 
     func editMessageText(chatId: Int64, messageId: Int64, text: String) async throws {
         try await client.editMessageText(chatId: chatId, messageId: messageId, text: text)
+    }
+
+    func unreadMentionIds(chatId: Int64, limit: Int) async throws -> [Int64] {
+        try await client.searchUnreadMentions(chatId: chatId, fromMessageId: 0, limit: limit).messages.map(\.id)
     }
 
     func sendSticker(chatId: Int64, remoteFileId: String, emoji: String, width: Int, height: Int) async throws -> Message {

@@ -133,6 +133,7 @@ struct ChatListView: View {
             selfUserId: client.me?.id,
             userNames: client.userNames,
             draftText: row.draftText,
+            unreadMentionCount: row.unreadMentionCount,
             coalesceUpdates: true
         )
     }

@@ -64,6 +64,7 @@ final class ChatHistoryStore {
         selfUserId: Int64? = nil,
         userNames: UserNamesStore? = nil,
         draftText: String = "",
+        unreadMentionCount: Int = 0,
         coalesceUpdates: Bool = false,
         voicePlayback: VoicePlaybackController? = nil,
         audioPlayback: AudioPlaybackController? = nil
@@ -94,6 +95,7 @@ final class ChatHistoryStore {
             unreadDividerAfterId: dividerAfter
         )
         self.loadState = .loadingFirstPage
+        self.unreadMentionCount = unreadMentionCount
         self.voicePlayback.onFinished = { [weak self] voiceFileId in
             self?.playVoice(after: voiceFileId)
         }
@@ -522,6 +524,21 @@ final class ChatHistoryStore {
         }
     }
 
+    // MARK: - Mentions
+
+    /// Unread messages in this chat that mention the user.
+    private(set) var unreadMentionCount = 0
+
+    /// The oldest unread mention, the one to read first; nil if there's none.
+    func oldestUnreadMention() async -> Int64? {
+        do {
+            return try await loader.unreadMentionIds(chatId: chatId, limit: 100).last
+        } catch {
+            logger.warning("unread mentions failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     // MARK: - Reactions, edit, delete
 
     /// Adds the reaction, or removes it if the user already chose it.
@@ -573,8 +590,11 @@ final class ChatHistoryStore {
         case .messageInteractionInfo(let chatId, let messageId, let info) where chatId == self.chatId:
             window.applyInteractionInfo(id: messageId, info: info)
             scheduleReproject()
-        case .messageMentionRead(let chatId, let messageId, _) where chatId == self.chatId:
+        case .messageMentionRead(let chatId, let messageId, let count) where chatId == self.chatId:
             window.applyMentionRead(id: messageId)
+            unreadMentionCount = count
+        case .chatUnreadMentionCount(let chatId, let count) where chatId == self.chatId:
+            unreadMentionCount = count
         default:
             break
         }
@@ -636,12 +656,17 @@ final class ChatHistoryStore {
 
     /// Auto-advance: when a voice note finishes, play the next voice note below
     /// it in the loaded history (downloading it first if needed).
+    /// The voice message that just started playing on its own after the previous one;
+    /// the list scrolls it into view.
+    private(set) var autoplayedMessageId: Int64?
+
     private func playVoice(after voiceFileId: Int) {
         var passedFinished = false
         for row in rows {
             guard case .bubble(let bubble) = row, let voice = bubble.voiceNote else { continue }
             if passedFinished {
                 togglePlayback(voice)
+                autoplayedMessageId = bubble.messageId
                 return
             }
             if voice.voiceFileId == voiceFileId { passedFinished = true }

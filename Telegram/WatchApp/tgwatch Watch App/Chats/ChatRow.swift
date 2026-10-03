@@ -18,6 +18,8 @@ struct ChatRow: Identifiable, Equatable, Hashable {
     /// True when the chat's last message is a sent outgoing message the recipient
     /// hasn't read yet (`id > lastReadOutboxMessageId`). Mirrors `MessageRow.isUnreadOutgoing`.
     var isUnreadOutgoing: Bool = false
+    /// Unread messages mentioning the user.
+    var unreadMentionCount: Int = 0
 
     /// Compacts the store's chat cache into a sorted `[ChatRow]`. Chats without a position
     /// in `currentFolder` are dropped. Sort: highest `order` first, which naturally puts
@@ -66,7 +68,8 @@ struct ChatRow: Identifiable, Equatable, Hashable {
                 lastMessageId: entry.chat.lastMessage?.id,
                 lastMessageDate: entry.chat.lastMessage?.date,
                 avatar: avatarVisual(for: entry.chat, fileLocals: fileLocals, selfUserId: selfUserId),
-                isUnreadOutgoing: isUnreadOutgoing
+                isUnreadOutgoing: isUnreadOutgoing,
+                unreadMentionCount: entry.chat.unreadMentionCount
             )
         }
     }
