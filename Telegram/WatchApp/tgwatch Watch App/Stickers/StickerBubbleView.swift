@@ -57,7 +57,14 @@ struct StickerBubbleView: View {
         case .tgs:
             LottieAnimationView(sticker: sticker, displaySize: displaySize)
         case .unsupported:
-            unsupportedBubble
+            // Video (WEBM/VP9) stickers can't be decoded on watchOS. Show their still
+            // raster thumbnail when they carry one (WebPStickerView falls back to it,
+            // since the WEBM body is never downloaded), else the text placeholder.
+            if sticker.thumbnailFileId != nil {
+                WebPStickerView(sticker: sticker, displaySize: displaySize)
+            } else {
+                unsupportedBubble
+            }
         }
     }
 
@@ -93,7 +100,13 @@ struct StickerBubbleView: View {
     private func handleVisibility(_ visible: Bool) {
         switch sticker.format {
         case .unsupported:
-            return  // No download for unsupported formats.
+            // The body can't be rendered; only fetch the still thumbnail, if any.
+            guard let thumbId = sticker.thumbnailFileId else { return }
+            if visible {
+                store.requestFileDownload(fileId: thumbId)
+            } else {
+                store.cancelFileDownload(fileId: thumbId)
+            }
         case .webp, .tgs:
             if visible {
                 store.requestFileDownload(fileId: sticker.fileId)
