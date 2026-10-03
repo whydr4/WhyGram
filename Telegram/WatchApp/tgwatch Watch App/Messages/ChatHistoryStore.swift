@@ -718,7 +718,7 @@ final class ChatHistoryStore {
         #if DEBUG
         debugReprojectCount += 1
         #endif
-        rows = messageRows(
+        let newRows = messageRows(
             messages: Array(window.cache.values),
             userNames: userNames.names,
             fileLocals: files,
@@ -730,6 +730,9 @@ final class ChatHistoryStore {
             unreadDividerAfterId: window.unreadDividerAfterId,
             lastReadOutboxMessageId: lastReadOutboxMessageId
         )
+        // Many updates (a user's name, a file for a row out of the window) project to
+        // the same rows; assigning anyway would re-render the whole list.
+        if newRows != rows { rows = newRows }
         // If a voice playback is awaiting its file, advance it now that the
         // projection has the freshest `localPath`.
         if case .preparing(let pendingId, _) = voicePlayback.state {

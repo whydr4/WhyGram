@@ -27,11 +27,9 @@ struct MessageListView: View {
     // view lands on the unread divider instead of the bottom.
     @State private var isAtBottom: Bool
     @State private var didApplyInitialScroll: Bool = false
-    // Live scroll-view content height, updated by a dedicated geometry observer
-    // (see `.onScrollGeometryChange(for: CGFloat.self)` below). The initial-
-    // position `.task` polls this to detect when bubbles have finished async-
-    // sizing, rather than guessing a fixed settle delay.
-    @State private var observedContentHeight: CGFloat = 0
+    /// The last user scroll moved up (toward older messages) and the scroll hasn't come
+    /// to rest. Picks which edge the content stays pinned to when its size changes.
+    @State private var scrollingUp = false
     // Pagination triggers fire from `.onScrollVisibilityChange` on the top/bottom rows.
     // On initial layout — especially for all-unread chats where the divider lands at
     // row index 0 — the topmost rows are visible without any user gesture, which would
@@ -231,13 +229,13 @@ struct MessageListView: View {
                                     onVideoTap: { presentedVideo = $0 },
                                     onVideoNoteTap: { presentedVideoNote = $0 },
                                     onPollTap: { id, poll in presentedPoll = PollVoteTarget(id: id, poll: poll) },
-                                    index: idx,
-                                    count: store.rows.count,
+                                    isNearTop: idx <= 8,
+                                    isNearBottom: idx >= store.rows.count - 9,
                                     onEnterTopEdge: {
                                         guard userHasScrolled, canPaginate else { return }
                                         canPaginate = false
                                         restoreAfterPrepend = true
-                                        DebugTrace.log("loadOlder trigger row=\(idx) rows=\(store.rows.count) visible=\(visibleRows.ids.count)")
+                                        DebugTrace.log("loadOlder trigger row=\(messageRow.id) rows=\(store.rows.count) visible=\(visibleRows.ids.count)")
                                         Task {
                                             await store.loadOlder()
                                             DebugTrace.log("loadOlder done rows=\(store.rows.count)")
@@ -249,7 +247,7 @@ struct MessageListView: View {
                                     onEnterBottomEdge: {
                                         guard userHasScrolled, canPaginate, !store.window.reachesChatTail else { return }
                                         canPaginate = false
-                                        DebugTrace.log("loadNewer trigger row=\(idx) rows=\(store.rows.count)")
+                                        DebugTrace.log("loadNewer trigger row=\(messageRow.id) rows=\(store.rows.count)")
                                         Task {
                                             await store.loadNewer()
                                             DebugTrace.log("loadNewer done rows=\(store.rows.count)")
@@ -271,6 +269,7 @@ struct MessageListView: View {
                                         store.markVisible(messageId: id)
                                     }
                                 )
+                                .equatable()
                                 .background {
                                     if highlightedRowId == messageRow.id {
                                         RoundedRectangle(cornerRadius: 12)
@@ -342,18 +341,35 @@ struct MessageListView: View {
                         // contentSize.height - containerSize.height - contentInsets.top.
                         guard old.contentSizeH == new.contentSizeH else { return }
                         let bottomOffset = new.contentSizeH - new.containerSizeH - new.topInset
-                        isAtBottom = new.contentOffsetY >= bottomOffset - 8
+                        // This runs on every scroll frame: write state only when it
+                        // changes, or each frame re-renders the whole list.
+                        let atBottom = new.contentOffsetY >= bottomOffset - 8
+                        if isAtBottom != atBottom { isAtBottom = atBottom }
                         // contentSize-stable changes imply user-driven scroll; arm
                         // pagination so it only fires after the user actually moved.
-                        userHasScrolled = true
+                        if !userHasScrolled { userHasScrolled = true }
+                        if new.contentOffsetY != old.contentOffsetY {
+                            let up = new.contentOffsetY < old.contentOffsetY
+                            if scrollingUp != up { scrollingUp = up }
+                        }
                     }
-                    // Dedicated content-height tracker for the initial-position
-                    // settle loop. The ScrollSnapshot observer above bails early on
+                    .onScrollPhaseChange { _, phase in
+                        if !phase.isScrolling, scrollingUp { scrollingUp = false }
+                    }
+                    // Which edge keeps still when the content changes size. Rows built
+                    // above the viewport while scrolling up settle their real heights,
+                    // and older pages are prepended there: pinning the bottom keeps the
+                    // rows on screen in place without any scrolling of our own. Scrolling
+                    // down (newer pages appended, rows below settling) and at rest
+                    // (incoming messages while reading history) pin the top instead.
+                    .defaultScrollAnchor(sizeChangeAnchor, for: .sizeChanges)
+                    // Dedicated content-height tracker for the settle loops (kept in the
+                    // tracker, not @State, so growth doesn't re-render the list). The ScrollSnapshot observer above bails early on
                     // contentSize changes (to preserve user-driven isAtBottom), so it
                     // can't be used to watch growth; this one records height on every
                     // change, including the async bubble-sizing growth we wait out.
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, newValue in
-                        observedContentHeight = newValue
+                        visibleRows.contentHeight = newValue
                     }
                     .task {
                         // Initial positioning. This `default` branch only renders once the
@@ -395,7 +411,7 @@ struct MessageListView: View {
                         for _ in 0..<90 {                       // ~1.5s cap at one frame each
                             applyInitialPosition()
                             try? await Task.sleep(nanoseconds: 16_000_000)
-                            let height = observedContentHeight
+                            let height = visibleRows.contentHeight
                             if height == lastHeight {
                                 stableFrames += 1
                                 if stableFrames >= 3 { break }  // settled for ~3 frames
@@ -424,12 +440,22 @@ struct MessageListView: View {
                         // for the new layout arrive after this update. Separators are
                         // skipped as anchors because a same-day one moves up with the page.
                         guard restoreAfterPrepend, let oldId, oldId != newId else { return }
-                        restoreAfterPrepend = false
-                        if let anchor = viewportAnchor() {
-                            restore(anchor, proxy: proxy, reason: "prepend")
-                        } else {
+                        // The bottom-pinned size-change anchor (see .defaultScrollAnchor)
+                        // keeps the rows in place. Check that it did, and fall back to
+                        // scrolling the anchor row back if it didn't.
+                        guard let anchor = viewportAnchor() else {
                             proxy.scrollTo(oldId, anchor: .top)
                             DebugTrace.log("prepend restore fallback=\(oldId) visible=\(visibleRows.ids.count)")
+                            return
+                        }
+                        let pinned = sizeChangeAnchor == .bottom ? "bottom" : "top"
+                        Task {
+                            try? await Task.sleep(nanoseconds: 33_000_000)
+                            let drift = visibleRows.frames[anchor.rowId].map { $0.minY - anchor.top }
+                            if drift.map({ abs($0) > 40 }) ?? true {
+                                proxy.scrollTo(anchor.rowId, anchor: .top)
+                            }
+                            DebugTrace.log("prepend keep anchor=\(anchor.rowId) drift=\(drift.map { String(format: "%.1f", $0) } ?? "gone") pinned=\(pinned) visible=\(visibleRows.ids.count)")
                         }
                     }
                     .onChange(of: jumpToBottomRequest) {
@@ -525,12 +551,12 @@ struct MessageListView: View {
             for _ in 0..<45 {
                 proxy.scrollTo("bottomAnchor", anchor: .bottom)
                 try? await Task.sleep(nanoseconds: 16_000_000)
-                if observedContentHeight == lastHeight {
+                if visibleRows.contentHeight == lastHeight {
                     stableFrames += 1
                     if stableFrames >= 3 { break }
                 } else {
                     stableFrames = 0
-                    lastHeight = observedContentHeight
+                    lastHeight = visibleRows.contentHeight
                 }
             }
             proxy.scrollTo("bottomAnchor", anchor: .bottom)
@@ -550,20 +576,67 @@ struct MessageListView: View {
             guard await store.reveal(messageId: messageId),
                   let rowId = store.rows.first(where: { $0.messageId == messageId })?.id else { return }
             if let origin { replyReturnStack.append(origin) }
-            DebugTrace.log("reply jump to=\(rowId) from=\(origin?.rowId ?? "nil") stack=\(replyReturnStack.count)")
-            // Let a rebuilt window lay out before scrolling into it.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(rowId, anchor: .center)
-            }
             // The replied-to message is above the tail: offer the way back down.
             isAtBottom = false
-            highlightedRowId = rowId
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            if highlightedRowId == rowId {
-                withAnimation(.easeOut(duration: 0.4)) { highlightedRowId = nil }
-            }
+            let settled = await scrollAndSettle(on: rowId, proxy: proxy)
+            DebugTrace.log("reply jump to=\(rowId) from=\(origin?.rowId ?? "nil") stack=\(replyReturnStack.count) \(settled)")
+            await flash(rowId)
         }
+    }
+
+    /// Scrolls `rowId` to the middle of the screen and keeps it there until it stops
+    /// moving. A lazy stack only estimates the heights of rows it hasn't built, so one
+    /// `scrollTo` into far rows lands off once those rows are built and measured.
+    /// Returns a summary for the trace.
+    private func scrollAndSettle(on rowId: String, proxy: ScrollViewProxy) async -> String {
+        // Let a rebuilt window lay out before scrolling into it.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        withAnimation(.easeInOut(duration: 0.25)) {
+            proxy.scrollTo(rowId, anchor: .center)
+        }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let middle = (visibleRows.viewport?.containerSizeH ?? 0) / 2
+        let missBefore = visibleRows.frames[rowId].map { $0.midY - middle }
+        var lastY: CGFloat?
+        var stableFrames = 0
+        var pins = 0
+        while pins < 45 {
+            let y = visibleRows.frames[rowId]?.midY
+            if let y, abs(y - middle) < 2 { break }
+            if let y, let lastY, abs(y - lastY) < 0.5 {
+                // Parked off-middle but still: the row can't reach the middle (near
+                // an end of the content).
+                stableFrames += 1
+                if stableFrames >= 3 { break }
+            } else {
+                stableFrames = 0
+            }
+            lastY = y
+            proxy.scrollTo(rowId, anchor: .center)
+            pins += 1
+            try? await Task.sleep(nanoseconds: 16_000_000)
+        }
+        let missAfter = visibleRows.frames[rowId].map { $0.midY - middle }
+        func fmt(_ v: CGFloat?) -> String { v.map { String(format: "%.1f", $0) } ?? "unbuilt" }
+        return "miss=\(fmt(missBefore))->\(fmt(missAfter)) pins=\(pins)"
+    }
+
+    /// Briefly highlights a row the user was brought to.
+    private func flash(_ rowId: String) async {
+        highlightedRowId = rowId
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        if highlightedRowId == rowId {
+            withAnimation(.easeOut(duration: 0.4)) { highlightedRowId = nil }
+        }
+    }
+
+    /// The edge pinned when the content size changes (see `.defaultScrollAnchor`).
+    private var sizeChangeAnchor: UnitPoint {
+        // Parked at the chat's tail: stay there as messages arrive and rows settle.
+        if isAtBottom && store.window.reachesChatTail { return .bottom }
+        // An older page is loading or just landed above the viewport.
+        if restoreAfterPrepend { return .bottom }
+        return scrollingUp ? .bottom : .top
     }
 
     // MARK: - Viewport anchors
@@ -589,43 +662,8 @@ struct MessageListView: View {
         return ViewportAnchor(rowId: id, messageId: messageId, top: frame.minY, height: frame.height)
     }
 
-    /// Scrolls so the anchor's top edge is back at `anchor.top`, then checks where it
-    /// landed and corrects the remaining error.
-    private func restore(_ anchor: ViewportAnchor, proxy: ScrollViewProxy, reason: String) {
-        proxy.scrollTo(anchor.rowId, anchor: unitPoint(placingTopAt: anchor.top, height: anchor.height))
-        Task {
-            var target = anchor.top
-            var errors: [String] = []
-            for _ in 0..<2 {
-                try? await Task.sleep(nanoseconds: 33_000_000)
-                guard let landed = visibleRows.frames[anchor.rowId]?.minY else {
-                    errors.append("gone")
-                    break
-                }
-                let error = landed - anchor.top
-                errors.append(String(format: "%.1f", error))
-                guard abs(error) >= 2 else { break }
-                target -= error
-                proxy.scrollTo(anchor.rowId, anchor: unitPoint(placingTopAt: target, height: anchor.height))
-            }
-            let v = visibleRows.viewport
-            DebugTrace.log("\(reason) restore anchor=\(anchor.rowId) top=\(Int(anchor.top)) h=\(Int(anchor.height)) err=\(errors.joined(separator: ",")) view=\(Int(v?.containerSizeH ?? 0))/\(Int(v?.topInset ?? 0))/\(Int(v?.bottomInset ?? 0)) visible=\(visibleRows.ids.count)")
-        }
-    }
-
-    /// The `scrollTo` anchor that puts a row of `height` with its top edge `top` points
-    /// below the top of the scroll view. `scrollTo` lines up the same unit point of the
-    /// row and of the viewport inside its content insets, so the row's top lands at
-    /// `insetTop + y * (insetHeight - height)`.
-    private func unitPoint(placingTopAt top: CGFloat, height: CGFloat) -> UnitPoint {
-        guard let v = visibleRows.viewport else { return .top }
-        let span = v.containerSizeH - v.topInset - v.bottomInset - height
-        guard abs(span) >= 1 else { return .top }
-        return UnitPoint(x: 0.5, y: (top - v.topInset) / span)
-    }
-
     /// Jump-to-bottom tap after a reply jump: reloads the window around the message the
-    /// jump started from, if it was replaced, and puts it back where it was on screen.
+    /// jump started from, if it was replaced, and brings it to the middle of the screen.
     private func returnFromReply(to anchor: ViewportAnchor, proxy: ScrollViewProxy) {
         DebugTrace.log("reply return to=\(anchor.rowId) left=\(replyReturnStack.count)")
         Task {
@@ -634,9 +672,9 @@ struct MessageListView: View {
                 scrollToBottom(proxy: proxy)
                 return
             }
-            // Let a rebuilt window lay out before scrolling into it.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            restore(anchor, proxy: proxy, reason: "reply")
+            let settled = await scrollAndSettle(on: anchor.rowId, proxy: proxy)
+            DebugTrace.log("reply returned to=\(anchor.rowId) \(settled)")
+            await flash(anchor.rowId)
         }
     }
 }
@@ -668,4 +706,6 @@ private final class VisibleRowTracker {
     /// Frames of built rows in the scroll view's visible area.
     var frames: [String: CGRect] = [:]
     var viewport: ScrollSnapshot?
+    /// Content height, polled by the settle loops to tell when rows stop resizing.
+    var contentHeight: CGFloat = 0
 }
