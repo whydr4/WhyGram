@@ -46,6 +46,9 @@ struct MessageListView: View {
     @State private var canPaginate: Bool = true
     /// Row briefly highlighted after jumping to it from a reply header.
     @State private var highlightedRowId: String?
+    /// Incoming messages that arrived below the viewport while the user was scrolled
+    /// up; shown on the jump-to-bottom button with the store's `unseenNewerCount`.
+    @State private var newBelowCount = 0
 
     init(row: ChatRow, store: ChatHistoryStore) {
         self.row = row
@@ -393,11 +396,26 @@ struct MessageListView: View {
                               newId != nil,
                               store.window.reachesChatTail,
                               case .bubble(let bubble) = store.rows.last else { return }
-                        guard bubble.isOutgoing || isAtBottom else { return }
+                        guard bubble.isOutgoing || isAtBottom else {
+                            newBelowCount += 1
+                            return
+                        }
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo("bottomAnchor", anchor: .bottom)
                         }
                     }
+                    .onChange(of: isAtBottom) { _, atBottom in
+                        if atBottom { newBelowCount = 0 }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if didApplyInitialScroll, !isAtBottom || !store.window.reachesChatTail {
+                            jumpToBottomButton(proxy: proxy)
+                                .padding(.trailing, 10)
+                                .padding(.bottom, 18)
+                                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: isAtBottom)
                 }
             }
             // Cover the first-layout→settle window (the `.task` above re-pins to the final
@@ -416,6 +434,47 @@ struct MessageListView: View {
         }
     }
 
+    private func jumpToBottomButton(proxy: ScrollViewProxy) -> some View {
+        let unseen = newBelowCount + store.unseenNewerCount
+        return Button {
+            scrollToBottom(proxy: proxy)
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .contentShape(Circle())
+                .glassEffect(in: Circle())
+                .overlay(alignment: .top) {
+                    if unseen > 0 {
+                        Text(unseen > 99 ? "99+" : "\(unseen)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .background(Capsule().fill(Color.accentColor))
+                            .offset(y: -8)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("jumpToBottom")
+    }
+
+    /// Jump-to-bottom tap: reloads the chat tail first when the window was moved away
+    /// from it (a reply jump, or paging up far), then pins the bottom while the lazy
+    /// rows above it settle their heights.
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        Task {
+            await store.jumpToBottom()
+            for _ in 0..<5 {
+                proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
+            isAtBottom = true
+            newBelowCount = 0
+        }
+    }
+
     /// Reply-header tap: loads the replied-to message if needed, scrolls it into the
     /// middle of the screen and flashes its row.
     private func jumpToMessage(_ messageId: Int64, proxy: ScrollViewProxy) {
@@ -427,6 +486,8 @@ struct MessageListView: View {
             withAnimation(.easeInOut(duration: 0.25)) {
                 proxy.scrollTo(rowId, anchor: .center)
             }
+            // The replied-to message is above the tail: offer the way back down.
+            isAtBottom = false
             highlightedRowId = rowId
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             if highlightedRowId == rowId {
