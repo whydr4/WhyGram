@@ -75,12 +75,12 @@ struct PhotoBubbleView: View {
 
     @ViewBuilder
     private var imageView: some View {
-        if let path = photo.localPath, let img = DecodedImageCache.image(atPath: path) {
-            Image(uiImage: img).resizable().scaledToFill()
-        } else if let data = photo.minithumbnail, let img = DecodedImageCache.image(data: data) {
-            Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
-        } else {
-            Color.gray.opacity(0.3)
+        DecodedFileImage(path: photo.localPath, maxPixelSize: DecodeSize.bubble) {
+            if let data = photo.minithumbnail, let img = DecodedImageCache.image(data: data) {
+                Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
+            } else {
+                Color.gray.opacity(0.3)
+            }
         }
     }
 

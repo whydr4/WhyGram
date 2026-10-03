@@ -41,16 +41,16 @@ struct AvatarView: View {
                     .foregroundStyle(.white)
             }
         case .normal:
-            if let path = avatar.photoLocalPath, let img = DecodedImageCache.image(atPath: path) {
-                Image(uiImage: img).resizable().scaledToFill()
-            } else if let data = avatar.mini, let img = DecodedImageCache.image(data: data) {
-                Image(uiImage: img).resizable().scaledToFill().blur(radius: 1.5)
-            } else {
-                ZStack {
-                    Circle().fill(avatarPalette[avatar.colorIndex])
-                    Text(avatar.initials)
-                        .font(.system(size: size * 0.4, weight: .semibold))
-                        .foregroundStyle(.white)
+            DecodedFileImage(path: avatar.photoLocalPath, maxPixelSize: DecodeSize.avatar) {
+                if let data = avatar.mini, let img = DecodedImageCache.image(data: data) {
+                    Image(uiImage: img).resizable().scaledToFill().blur(radius: 1.5)
+                } else {
+                    ZStack {
+                        Circle().fill(avatarPalette[avatar.colorIndex])
+                        Text(avatar.initials)
+                            .font(.system(size: size * 0.4, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
                 }
             }
         }

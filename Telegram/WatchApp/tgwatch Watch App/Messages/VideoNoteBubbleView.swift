@@ -64,12 +64,12 @@ struct VideoNoteBubbleView: View {
 
     @ViewBuilder
     private var imageView: some View {
-        if let path = note.thumbLocalPath, let img = DecodedImageCache.image(atPath: path) {
-            Image(uiImage: img).resizable().scaledToFill()
-        } else if let data = note.minithumbnail, let img = DecodedImageCache.image(data: data) {
-            Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
-        } else {
-            Color.gray.opacity(0.3)
+        DecodedFileImage(path: note.thumbLocalPath, maxPixelSize: DecodeSize.bubble) {
+            if let data = note.minithumbnail, let img = DecodedImageCache.image(data: data) {
+                Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
+            } else {
+                Color.gray.opacity(0.3)
+            }
         }
     }
 

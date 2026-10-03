@@ -93,12 +93,12 @@ struct VideoBubbleView: View {
 
     @ViewBuilder
     private var imageView: some View {
-        if let path = video.preview.previewLocalPath, let img = DecodedImageCache.image(atPath: path) {
-            Image(uiImage: img).resizable().scaledToFill()
-        } else if let data = video.preview.minithumbnail, let img = DecodedImageCache.image(data: data) {
-            Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
-        } else {
-            Color.gray.opacity(0.3)
+        DecodedFileImage(path: video.preview.previewLocalPath, maxPixelSize: DecodeSize.bubble) {
+            if let data = video.preview.minithumbnail, let img = DecodedImageCache.image(data: data) {
+                Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
+            } else {
+                Color.gray.opacity(0.3)
+            }
         }
     }
 
