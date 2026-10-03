@@ -73,6 +73,7 @@
 		99F0C429392E04F83F9935B2 /* StickerRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22AAEA9EF0EC8A548BB916EC /* StickerRow.swift */; };
 		9D232B81EAE7720972261B34 /* tgwatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4BDBD692A424C5C24D61B4F /* tgwatchApp.swift */; };
 		9FC324F2FEBBDF3C24360CA3 /* LocationBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596AF8BF88C38D2018397A33 /* LocationBubbleView.swift */; };
+		D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */; };
 		A0899809BBC92D1563AC4160 /* ReplyBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7584BF25A84BAD24AB992A79 /* ReplyBar.swift */; };
 		A121DA7622C910B267D69B6E /* PhotoBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F7533C5A9B419B29727C86 /* PhotoBubbleView.swift */; };
 		A6179A26CB7FB298567682E6 /* DocumentVisual.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF2515F0EDA29D5270610A69 /* DocumentVisual.swift */; };
@@ -170,6 +171,7 @@
 		6DDFFE71E0C32258348A2510 /* AccountListProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountListProjection.swift; sourceTree = "<group>"; };
 		7108EAF6A69D8D59376A8914 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
 		72755AB1D5DB932DDC3CE2D3 /* SampleStickers */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SampleStickers; path = Assets/SampleStickers; sourceTree = SOURCE_ROOT; };
+		D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedImageCache.swift; sourceTree = "<group>"; };
 		7584BF25A84BAD24AB992A79 /* ReplyBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyBar.swift; sourceTree = "<group>"; };
 		7889969AFF462911B9828843 /* MessageRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRowView.swift; sourceTree = "<group>"; };
 		78DB439A3F9A5EA35ECDFB86 /* PhotoViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoViewerView.swift; sourceTree = "<group>"; };
@@ -369,6 +371,7 @@
 				6B11F6105ABCE7E74B89A881 /* PollBubbleView.swift */,
 				FE4D691106D7EA2FEE35F37F /* PollVisual.swift */,
 				DF0F4F15CB43635717B31B92 /* PollVoteView.swift */,
+				D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */,
 				7584BF25A84BAD24AB992A79 /* ReplyBar.swift */,
 				DDCE599C8D50EE8832B4A797 /* ReplyFormatters.swift */,
 				F595E3DA02BF871A797A649A /* ReplyHeader.swift */,
@@ -578,6 +581,7 @@
 				25F6B3EFED8EDDD9983CB0F7 /* PollVoteView.swift in Sources */,
 				F95C046A6C043344F0955815 /* QrLinkPublisher.swift in Sources */,
 				B9F6D473AA0F1DAF77799E77 /* QrLoginView.swift in Sources */,
+				D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */,
 				A0899809BBC92D1563AC4160 /* ReplyBar.swift in Sources */,
 				FC110506EAA6FA010E83F407 /* ReplyFormatters.swift in Sources */,
 				641846C985430AD34793F0D3 /* ReplyHeader.swift in Sources */,

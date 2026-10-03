@@ -75,9 +75,9 @@ struct PhotoBubbleView: View {
 
     @ViewBuilder
     private var imageView: some View {
-        if let path = photo.localPath, let img = UIImage(contentsOfFile: path) {
+        if let path = photo.localPath, let img = DecodedImageCache.image(atPath: path) {
             Image(uiImage: img).resizable().scaledToFill()
-        } else if let data = photo.minithumbnail, let img = UIImage(data: data) {
+        } else if let data = photo.minithumbnail, let img = DecodedImageCache.image(data: data) {
             Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
         } else {
             Color.gray.opacity(0.3)

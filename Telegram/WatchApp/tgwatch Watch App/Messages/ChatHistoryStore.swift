@@ -349,32 +349,32 @@ final class ChatHistoryStore {
 
     // MARK: - Jump-to-bottom
 
-    private var isJumpingToBottom = false
-
     /// Caller (the view) is responsible for the actual `proxy.scrollTo` after this
     /// returns. Two paths:
     ///   - `reachesChatTail` already true: cheap; just zero the counter.
     ///   - else: clear window, re-build at the tail, then return.
+    /// Like `reveal(messageId:)`, it keeps the old window when the tail can't be
+    /// loaded (or a load is already running) instead of failing the whole chat.
     func jumpToBottom() async {
         if window.reachesChatTail {
             unseenNewerCount = 0
             return
         }
-        guard !isJumpingToBottom else { return }
-        isJumpingToBottom = true
-        defer { isJumpingToBottom = false }
+        guard !isLoading, !isLoadingOlder, !isLoadingNewer else { return }
+        isLoading = true
+        defer { isLoading = false }
 
         // Rebuild window with anchor=.tail and no divider.
+        let previous = window
         window = MessageWindow(anchor: .tail, halfLimit: Self.halfLimit, unreadDividerAfterId: nil)
-        unseenNewerCount = 0
 
         do {
             try await loadInitialWindow()
-            loadState = .loaded
-        } catch is CancellationError {
-            return
+            unseenNewerCount = 0
         } catch {
-            loadState = .failed(humanMessage(error))
+            logger.warning("jumpToBottom failed: \(String(describing: error), privacy: .public)")
+            window = previous
+            reproject()
         }
     }
 
@@ -630,8 +630,17 @@ final class ChatHistoryStore {
             window.applyPollUpdate(poll: upd.poll)
             scheduleReproject()
         case .updateFile(let upd):
+            // Only this chat's files (primed from its messages, or requested here);
+            // TDLib reports every download in the app, avatars included.
+            let previous = files[upd.file.id]
+            guard previous != nil || trackedFileIds.contains(upd.file.id) else { return }
             files[upd.file.id] = upd.file
-            if trackedFileIds.contains(upd.file.id) { scheduleReproject() }
+            // Rows only show finished files, so progress ticks don't need a reprojection
+            // of the whole history; viewers that show progress read `fileSnapshot`.
+            guard trackedFileIds.contains(upd.file.id),
+                  previous?.local.isDownloadingCompleted != upd.file.local.isDownloadingCompleted
+                    || previous?.local.path != upd.file.local.path else { return }
+            scheduleReproject()
         case .updateChatReadOutbox(let upd) where upd.chatId == chatId:
             lastReadOutboxMessageId = upd.lastReadOutboxMessageId
             scheduleReproject()

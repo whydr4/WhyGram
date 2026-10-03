@@ -265,8 +265,15 @@ final class ChatListStore {
             }
             scheduleReproject()
         case .updateFile(let upd):
+            // Only avatar files; TDLib reports every download in the app here.
+            let previous = files[upd.file.id]
+            guard previous != nil || trackedFileIds.contains(upd.file.id) else { return }
             files[upd.file.id] = upd.file
-            if trackedFileIds.contains(upd.file.id) { scheduleReproject() }
+            // Rows only show finished avatars, so progress ticks don't reproject.
+            guard trackedFileIds.contains(upd.file.id),
+                  previous?.local.isDownloadingCompleted != upd.file.local.isDownloadingCompleted
+                    || previous?.local.path != upd.file.local.path else { return }
+            scheduleReproject()
         default:
             break
         }

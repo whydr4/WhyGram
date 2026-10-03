@@ -52,7 +52,7 @@ struct ReplyHeaderView: View {
                 .fill(barColor)
                 .frame(width: 2)
 
-            if let data = header.minithumbnail, let img = UIImage(data: data) {
+            if let data = header.minithumbnail, let img = DecodedImageCache.image(data: data) {
                 Image(uiImage: img)
                     .resizable()
                     .scaledToFill()
