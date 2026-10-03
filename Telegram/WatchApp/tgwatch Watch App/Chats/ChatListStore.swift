@@ -179,6 +179,19 @@ final class ChatListStore {
         }
     }
 
+    /// Updates the generated `Update` enum doesn't carry (see `ForkUpdate`).
+    func handle(_ update: ForkUpdate) {
+        switch update {
+        case .chatUnreadMentionCount(let chatId, let count), .messageMentionRead(let chatId, _, let count):
+            guard var cached = chatCache[chatId], cached.unreadMentionCount != count else { return }
+            cached.unreadMentionCount = count
+            chatCache[chatId] = cached
+            scheduleReproject()
+        default:
+            break
+        }
+    }
+
     func handle(_ update: Update) {
         diagnosticLog(update)
         switch update {

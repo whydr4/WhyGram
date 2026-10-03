@@ -41,6 +41,8 @@ struct CachedChat: Equatable {
     var avatarSmallFileId: Int? = nil
     /// `ChatPhotoInfo.minithumbnail` JPEG bytes — instant placeholder, no download.
     var avatarMini: Data? = nil
+    /// Unread messages mentioning the user.
+    var unreadMentionCount: Int = 0
 }
 
 /// Reduced shape of `Message` carrying the fields the chat-list preview reads
@@ -52,9 +54,37 @@ struct CachedMessage: Equatable {
     let editDate: Int
     let isOutgoing: Bool
     let senderId: MessageSender
-    let content: MessageContent
+    var content: MessageContent
     let sendingState: SendingState
     let replyTo: MessageReplyTo?
+    /// Reactions on the message, in TDLib's order.
+    var reactions: [ReactionChip] = []
+    /// The message mentions the user and they haven't read it yet.
+    var containsUnreadMention = false
+}
+
+/// One reaction on a message: what it is, how many reacted, and whether the user did.
+struct ReactionChip: Equatable, Hashable {
+    let type: ReactionType
+    let count: Int
+    let isChosen: Bool
+
+    /// The reaction as text: the emoji, or a stand-in for custom-emoji and paid
+    /// reactions, which would need a sticker to draw.
+    var label: String {
+        switch type {
+        case .reactionTypeEmoji(let e): return e.emoji
+        case .reactionTypePaid: return "⭐️"
+        default: return "✨"
+        }
+    }
+
+    static func chips(_ info: MessageInteractionInfo?) -> [ReactionChip] {
+        guard let reactions = info?.reactions, !reactions.areTags else { return [] }
+        return reactions.reactions.map {
+            ReactionChip(type: $0.type, count: $0.totalCount, isChosen: $0.isChosen)
+        }
+    }
 }
 
 extension CachedChat {
@@ -73,6 +103,7 @@ extension CachedChat {
         self.permissions = chat.permissions
         self.avatarSmallFileId = chat.photo?.small.id
         self.avatarMini = chat.photo?.minithumbnail?.data
+        self.unreadMentionCount = chat.unreadMentionCount
     }
 
     static func extractDraftText(_ draft: DraftMessage?) -> String? {
@@ -94,5 +125,7 @@ extension CachedMessage {
         self.content = message.content
         self.sendingState = SendingState(tdLibState: message.sendingState)
         self.replyTo = message.replyTo
+        self.reactions = ReactionChip.chips(message.interactionInfo)
+        self.containsUnreadMention = message.containsUnreadMention
     }
 }

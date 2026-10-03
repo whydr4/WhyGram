@@ -15,6 +15,7 @@ struct MessageBubbleView: View {
         #endif
         HStack(alignment: .top, spacing: 0) {
             if bubble.isOutgoing { Spacer(minLength: 16) }
+            VStack(alignment: bubble.isOutgoing ? .trailing : .leading, spacing: 2) {
             VStack(alignment: bubble.isOutgoing ? .trailing : .leading, spacing: 1) {
                 if let name = bubble.senderName, !bubble.isOutgoing, bubble.sticker == nil {
                     Text(name)
@@ -99,6 +100,10 @@ struct MessageBubbleView: View {
                 }
             }
             .overlay(alignment: .bottomLeading) { statusIndicator }
+                if !bubble.reactions.isEmpty {
+                    ReactionChipsView(messageId: bubble.messageId, chips: bubble.reactions, isOutgoing: bubble.isOutgoing)
+                }
+            }
             if !bubble.isOutgoing { Spacer(minLength: 16) }
         }
         .accessibilityIdentifier("bubble.\(bubble.messageId)")

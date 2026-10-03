@@ -522,6 +522,64 @@ final class ChatHistoryStore {
         }
     }
 
+    // MARK: - Reactions, edit, delete
+
+    /// Adds the reaction, or removes it if the user already chose it.
+    func toggleReaction(messageId: Int64, type: ReactionType) async {
+        let chosen = window.cache[messageId]?.reactions.contains { $0.type == type && $0.isChosen } ?? false
+        do {
+            try await loader.setReaction(chatId: chatId, messageId: messageId, type: type, add: !chosen)
+        } catch {
+            lastSendError = humanMessage(error)
+            logger.warning("setReaction failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// What the long-press menu offers for a message.
+    func actions(forMessageId messageId: Int64) async -> MessageActions {
+        async let reactions = try? loader.availableReactions(chatId: chatId, messageId: messageId)
+        async let properties = try? loader.messageProperties(chatId: chatId, messageId: messageId)
+        let chosen = Set(window.cache[messageId]?.reactions.filter(\.isChosen).map(\.type) ?? [])
+        return MessageActions(
+            reactions: (await reactions) ?? MessageActions.fallbackReactions,
+            chosenReactions: chosen,
+            properties: await properties
+        )
+    }
+
+    func deleteMessage(messageId: Int64, forEveryone: Bool) async {
+        do {
+            try await loader.deleteMessages(chatId: chatId, messageIds: [messageId], revoke: forEveryone)
+        } catch {
+            lastSendError = humanMessage(error)
+            logger.warning("deleteMessages failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func editMessageText(messageId: Int64, text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try await loader.editMessageText(chatId: chatId, messageId: messageId, text: trimmed)
+        } catch {
+            lastSendError = humanMessage(error)
+            logger.warning("editMessageText failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Updates the generated `Update` enum doesn't carry (see `ForkUpdate`).
+    func handle(_ update: ForkUpdate) {
+        switch update {
+        case .messageInteractionInfo(let chatId, let messageId, let info) where chatId == self.chatId:
+            window.applyInteractionInfo(id: messageId, info: info)
+            scheduleReproject()
+        case .messageMentionRead(let chatId, let messageId, _) where chatId == self.chatId:
+            window.applyMentionRead(id: messageId)
+        default:
+            break
+        }
+    }
+
     /// Looks up the currently-projected poll for a message id (for the Vote
     /// screen's post-vote quiz reveal — reads the latest `updatePoll`-patched state).
     func poll(forMessageId id: Int64) -> PollVisual? {
@@ -780,3 +838,17 @@ extension ChatHistoryStore {
     func testHook_markReachesChatTail() { window.markReachesChatTail() }
 }
 #endif
+
+/// What the long-press menu offers for one message.
+struct MessageActions {
+    /// Emoji reactions the user can add here, most used first.
+    let reactions: [ReactionType]
+    /// The user's current reactions on the message.
+    let chosenReactions: Set<ReactionType>
+    /// Edit / delete permissions; nil when they couldn't be loaded.
+    let properties: MessageProperties?
+
+    /// Used when the chat's available reactions can't be loaded.
+    static let fallbackReactions: [ReactionType] = ["👍", "❤️", "🔥", "😁", "😢", "🙏", "👎", "🤯"]
+        .map { .reactionTypeEmoji(ReactionTypeEmoji(emoji: $0)) }
+}

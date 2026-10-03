@@ -42,12 +42,28 @@ protocol ChatHistoryLoader: Sendable {
     func sendSticker(chatId: Int64, remoteFileId: String, emoji: String, width: Int, height: Int) async throws -> Message
     /// Sends the given coordinate as a static location message (`livePeriod` 0).
     func sendLocation(chatId: Int64, latitude: Double, longitude: Double) async throws -> Message
+    /// Adds (`isChosen` false) or removes (true) the user's reaction.
+    func setReaction(chatId: Int64, messageId: Int64, type: ReactionType, add: Bool) async throws
+    /// Reactions the user can add to a message (emoji ones, non-Premium), most used first.
+    func availableReactions(chatId: Int64, messageId: Int64) async throws -> [ReactionType]
+    /// Whether the message can be edited / deleted.
+    func messageProperties(chatId: Int64, messageId: Int64) async throws -> MessageProperties
+    func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws
+    func editMessageText(chatId: Int64, messageId: Int64, text: String) async throws
 }
+
+/// Thrown by loaders that don't implement an action (previews).
+struct LoaderUnsupported: Error {}
 
 extension ChatHistoryLoader {
     func loadLocalHistory(chatId: Int64, fromMessageId: Int64, offset: Int, limit: Int) async throws -> [Message] {
         []
     }
+    func setReaction(chatId: Int64, messageId: Int64, type: ReactionType, add: Bool) async throws { throw LoaderUnsupported() }
+    func availableReactions(chatId: Int64, messageId: Int64) async throws -> [ReactionType] { throw LoaderUnsupported() }
+    func messageProperties(chatId: Int64, messageId: Int64) async throws -> MessageProperties { throw LoaderUnsupported() }
+    func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws { throw LoaderUnsupported() }
+    func editMessageText(chatId: Int64, messageId: Int64, text: String) async throws { throw LoaderUnsupported() }
 }
 
 struct TDLibChatHistoryLoader: ChatHistoryLoader {
@@ -236,6 +252,37 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
 
     func setPollAnswer(chatId: Int64, messageId: Int64, optionIds: [Int]) async throws {
         _ = try await client.setPollAnswer(chatId: chatId, messageId: messageId, optionIds: optionIds)
+    }
+
+    func setReaction(chatId: Int64, messageId: Int64, type: ReactionType, add: Bool) async throws {
+        if add {
+            try await client.addMessageReaction(chatId: chatId, messageId: messageId, reactionType: type)
+        } else {
+            try await client.removeMessageReaction(chatId: chatId, messageId: messageId, reactionType: type)
+        }
+    }
+
+    func availableReactions(chatId: Int64, messageId: Int64) async throws -> [ReactionType] {
+        let available = try await client.getMessageAvailableReactions(chatId: chatId, messageId: messageId, rowSize: 4)
+        var seen = Set<ReactionType>()
+        return (available.topReactions + available.recentReactions + available.popularReactions)
+            .filter { reaction in
+                guard !reaction.needsPremium, case .reactionTypeEmoji = reaction.type else { return false }
+                return seen.insert(reaction.type).inserted
+            }
+            .map(\.type)
+    }
+
+    func messageProperties(chatId: Int64, messageId: Int64) async throws -> MessageProperties {
+        try await client.getMessageProperties(chatId: chatId, messageId: messageId)
+    }
+
+    func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws {
+        try await client.deleteMessages(chatId: chatId, messageIds: messageIds, revoke: revoke)
+    }
+
+    func editMessageText(chatId: Int64, messageId: Int64, text: String) async throws {
+        try await client.editMessageText(chatId: chatId, messageId: messageId, text: text)
     }
 
     func sendSticker(chatId: Int64, remoteFileId: String, emoji: String, width: Int, height: Int) async throws -> Message {

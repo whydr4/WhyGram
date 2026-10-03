@@ -21,6 +21,8 @@ struct MessageRowView: View, Equatable {
     /// Reports the row's frame in the scroll view's visible area, by row id.
     var onFrameChange: ((String, CGRect) -> Void)? = nil
     var onIncomingBubbleVisible: ((Int64) -> Void)? = nil
+    /// Long press on a message bubble (opens its actions).
+    var onLongPress: ((MessageBubble) -> Void)? = nil
 
     @Environment(\.openReplyTarget) private var openReplyTarget
 
@@ -54,6 +56,7 @@ struct MessageRowView: View, Equatable {
         switch row {
         case .bubble(let b):
             MessageBubbleView(bubble: b, onPhotoTap: onPhotoTap, onVideoTap: onVideoTap, onVideoNoteTap: onVideoNoteTap, onPollTap: onPollTap)
+                .onLongPressGesture(minimumDuration: 0.4) { onLongPress?(b) }
                 .onScrollVisibilityChange(threshold: 0.5) { visible in
                     guard visible, !b.isOutgoing else { return }
                     onIncomingBubbleVisible?(b.messageId)

@@ -196,6 +196,16 @@ final class TDClient {
                 logger.warning("update decode failed: \(error.localizedDescription, privacy: .public)")
                 return
             }
+            // Updates outside the generated subset come through as .unsupported; the
+            // fork's own ones decode from the same data.
+            if case .unsupported = update {
+                guard let fork = try? callbackClient.decoder.decode(ForkUpdate.self, from: data) else { return }
+                if case .other = fork { return }
+                DispatchQueue.main.async { [weak self] in
+                    self?.handle(fork)
+                }
+                return
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.handle(update)
             }
@@ -211,6 +221,11 @@ final class TDClient {
                 logger.warning("setLogVerbosityLevel failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    private func handle(_ update: ForkUpdate) {
+        activeHistory?.handle(update)
+        chatList?.handle(update)
     }
 
     private func handle(_ update: Update) {

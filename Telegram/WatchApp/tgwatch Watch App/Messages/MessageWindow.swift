@@ -98,13 +98,23 @@ struct MessageWindow: Equatable {
     }
 
     mutating func applyContentUpdate(id: Int64, newContent: MessageContent) {
-        guard let existing = cache[id] else { return }
-        cache[id] = CachedMessage(
-            id: existing.id, date: existing.date, editDate: existing.editDate,
-            isOutgoing: existing.isOutgoing, senderId: existing.senderId,
-            content: newContent, sendingState: existing.sendingState,
-            replyTo: existing.replyTo
-        )
+        guard var message = cache[id] else { return }
+        message.content = newContent
+        cache[id] = message
+    }
+
+    /// Replaces a message's reactions (from `updateMessageInteractionInfo`).
+    mutating func applyInteractionInfo(id: Int64, info: MessageInteractionInfo?) {
+        guard var message = cache[id] else { return }
+        message.reactions = ReactionChip.chips(info)
+        cache[id] = message
+    }
+
+    /// Clears a message's unread-mention mark (from `updateMessageMentionRead`).
+    mutating func applyMentionRead(id: Int64) {
+        guard var message = cache[id], message.containsUnreadMention else { return }
+        message.containsUnreadMention = false
+        cache[id] = message
     }
 
     /// Patches the cached `messagePoll` whose `poll.id` matches the updated poll
@@ -119,12 +129,9 @@ struct MessageWindow: Equatable {
                 media: mp.media,
                 poll: poll
             )
-            cache[id] = CachedMessage(
-                id: existing.id, date: existing.date, editDate: existing.editDate,
-                isOutgoing: existing.isOutgoing, senderId: existing.senderId,
-                content: .messagePoll(rebuilt),
-                sendingState: existing.sendingState, replyTo: existing.replyTo
-            )
+            var message = existing
+            message.content = .messagePoll(rebuilt)
+            cache[id] = message
             return
         }
     }

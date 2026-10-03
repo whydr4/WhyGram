@@ -1,4 +1,5 @@
 import SwiftUI
+import WatchKit
 
 private struct ScrollSnapshot: Equatable {
     let contentOffsetY: CGFloat
@@ -55,6 +56,8 @@ struct MessageListView: View {
     /// Where each reply jump started, newest last. The jump-to-bottom button returns
     /// to these first, and goes to the bottom once they are used up.
     @State private var replyReturnStack: [ViewportAnchor] = []
+    /// The message whose long-press actions sheet is open.
+    @State private var actionTarget: ActionTarget?
     /// Row briefly highlighted after jumping to it from a reply header.
     @State private var highlightedRowId: String?
     /// Incoming messages that arrived below the viewport while the user was scrolled
@@ -105,6 +108,9 @@ struct MessageListView: View {
         }
         .sheet(item: $presentedVideoNote) { note in
             VideoNotePlayerView(note: note).environment(store)
+        }
+        .sheet(item: $actionTarget) { target in
+            MessageActionsView(bubble: target.bubble, store: store)
         }
         .sheet(item: $presentedPoll) { target in
             PollVoteView(
@@ -292,6 +298,10 @@ struct MessageListView: View {
                                     onIncomingBubbleVisible: { id in
                                         guard id > store.unreadDividerAfterIdSnapshot else { return }
                                         store.markVisible(messageId: id)
+                                    },
+                                    onLongPress: { bubble in
+                                        WKInterfaceDevice.current().play(.click)
+                                        actionTarget = ActionTarget(bubble: bubble)
                                     }
                                 )
                                 .equatable()
@@ -727,6 +737,12 @@ struct MessageListView: View {
             await flash(anchor.rowId)
         }
     }
+}
+
+/// The message a long-press actions sheet is for.
+struct ActionTarget: Identifiable {
+    let bubble: MessageBubble
+    var id: Int64 { bubble.messageId }
 }
 
 struct PrependBase {

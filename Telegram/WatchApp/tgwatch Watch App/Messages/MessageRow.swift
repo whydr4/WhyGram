@@ -58,6 +58,8 @@ struct MessageBubble: Equatable, Hashable {
     /// True for content with no dedicated bubble — renders the "Unsupported message"
     /// placeholder. Set from `isUnsupportedContent(msg.content)` in `messageRows`.
     var isUnsupported: Bool = false
+    /// Reactions shown under the bubble.
+    var reactions: [ReactionChip] = []
 
     /// The delivery-status indicator to render for this bubble. Outgoing only;
     /// `isUnreadOutgoing` already encodes "sent, unread, not Saved Messages".
@@ -188,7 +190,8 @@ func messageRows(
             ),
             senderColorIndex: sender?.colorIndex,
             isUnreadOutgoing: !isSavedMessages && msg.isOutgoing && msg.sendingState == .sent && msg.id > lastReadOutboxMessageId,
-            isUnsupported: isUnsupportedContent(msg.content)
+            isUnsupported: isUnsupportedContent(msg.content),
+            reactions: msg.reactions
         )))
     }
     return rows
