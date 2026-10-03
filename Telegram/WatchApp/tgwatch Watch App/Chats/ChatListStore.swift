@@ -179,12 +179,82 @@ final class ChatListStore {
         }
     }
 
+    // MARK: - Swipe actions
+
+    /// Reads the chat (or clears its unread mark); marks a read chat as unread.
+    func toggleRead(chatId: Int64) {
+        guard let cached = chatCache[chatId] else { return }
+        let isUnread = cached.unreadCount > 0 || cached.isMarkedAsUnread || cached.unreadMentionCount > 0
+        let lastMessageId = cached.lastMessage?.id
+        perform("toggleRead") { [loader] in
+            if isUnread {
+                if cached.isMarkedAsUnread { try await loader.setMarkedAsUnread(chatId: chatId, false) }
+                if cached.unreadCount > 0 || cached.unreadMentionCount > 0 {
+                    try await loader.markRead(chatId: chatId, lastMessageId: lastMessageId)
+                }
+            } else {
+                try await loader.setMarkedAsUnread(chatId: chatId, true)
+            }
+        }
+    }
+
+    /// Mutes the chat for good, or unmutes it. Keeps its other notification settings.
+    func toggleMute(chatId: Int64) {
+        guard let cached = chatCache[chatId], let s = cached.notificationSettings else { return }
+        let muteFor = cached.muteFor > 0 ? 0 : Int(Int32.max)
+        let settings = ChatNotificationSettings(
+            disableMentionNotifications: s.disableMentionNotifications,
+            disablePinnedMessageNotifications: s.disablePinnedMessageNotifications,
+            muteFor: muteFor,
+            muteStories: s.muteStories,
+            showPreview: s.showPreview,
+            showStoryPoster: s.showStoryPoster,
+            soundId: s.soundId,
+            storySoundId: s.storySoundId,
+            useDefaultDisableMentionNotifications: s.useDefaultDisableMentionNotifications,
+            useDefaultDisablePinnedMessageNotifications: s.useDefaultDisablePinnedMessageNotifications,
+            useDefaultMuteFor: false,
+            useDefaultMuteStories: s.useDefaultMuteStories,
+            useDefaultShowPreview: s.useDefaultShowPreview,
+            useDefaultShowStoryPoster: s.useDefaultShowStoryPoster,
+            useDefaultSound: s.useDefaultSound,
+            useDefaultStorySound: s.useDefaultStorySound
+        )
+        perform("toggleMute") { [loader] in
+            try await loader.setNotificationSettings(chatId: chatId, settings)
+        }
+    }
+
+    /// Moves the chat to the archive, or out of it when the archive is the open list.
+    func toggleArchive(chatId: Int64) {
+        let target: ChatList = ChatListKey(currentFolder) == ChatListKey(.chatListArchive) ? .chatListMain : .chatListArchive
+        perform("toggleArchive") { [loader] in
+            try await loader.moveChat(chatId: chatId, to: target)
+        }
+    }
+
+    private func perform(_ name: String, _ action: @escaping @Sendable () async throws -> Void) {
+        Task { [logger] in
+            do {
+                try await action()
+            } catch {
+                logger.warning("\(name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                DebugTrace.log("\(name) failed: \(error)")
+            }
+        }
+    }
+
     /// Updates the generated `Update` enum doesn't carry (see `ForkUpdate`).
     func handle(_ update: ForkUpdate) {
         switch update {
         case .chatUnreadMentionCount(let chatId, let count), .messageMentionRead(let chatId, _, let count):
             guard var cached = chatCache[chatId], cached.unreadMentionCount != count else { return }
             cached.unreadMentionCount = count
+            chatCache[chatId] = cached
+            scheduleReproject()
+        case .chatIsMarkedAsUnread(let chatId, let marked):
+            guard var cached = chatCache[chatId], cached.isMarkedAsUnread != marked else { return }
+            cached.isMarkedAsUnread = marked
             chatCache[chatId] = cached
             scheduleReproject()
         default:
@@ -231,6 +301,7 @@ final class ChatListStore {
         case .updateChatNotificationSettings(let upd):
             guard var cached = chatCache[upd.chatId] else { return }
             cached.muteFor = upd.notificationSettings.muteFor
+            cached.notificationSettings = upd.notificationSettings
             chatCache[upd.chatId] = cached
             scheduleReproject()
         case .updateChatPermissions(let upd):

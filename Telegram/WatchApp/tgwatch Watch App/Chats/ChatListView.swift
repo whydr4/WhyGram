@@ -108,6 +108,34 @@ struct ChatListView: View {
                     }
                     .buttonStyle(.plain)
                     .onAppear { store.ensureChatsLoaded(near: idx) }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        let isUnread = row.unreadCount > 0 || row.isMarkedAsUnread || row.unreadMentionCount > 0
+                        Button {
+                            store.toggleRead(chatId: row.id)
+                        } label: {
+                            Label(isUnread ? "Read" : "Unread",
+                                  systemImage: isUnread ? "envelope.open.fill" : "envelope.badge.fill")
+                        }
+                        .tint(.blue)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        // Telegram allows neither for Saved Messages.
+                        if row.avatar.kind != .savedMessages {
+                        Button {
+                            store.toggleMute(chatId: row.id)
+                        } label: {
+                            Label(row.isMuted ? "Unmute" : "Mute",
+                                  systemImage: row.isMuted ? "bell.fill" : "bell.slash.fill")
+                        }
+                        .tint(.orange)
+                        Button {
+                            store.toggleArchive(chatId: row.id)
+                        } label: {
+                            Label("Archive", systemImage: "archivebox.fill")
+                        }
+                        .tint(.gray)
+                        }
+                    }
                 }
             }
         }

@@ -43,6 +43,10 @@ struct CachedChat: Equatable {
     var avatarMini: Data? = nil
     /// Unread messages mentioning the user.
     var unreadMentionCount: Int = 0
+    /// The user marked the chat as unread.
+    var isMarkedAsUnread = false
+    /// The chat's full notification settings; mute changes keep everything but `muteFor`.
+    var notificationSettings: ChatNotificationSettings? = nil
 }
 
 /// Reduced shape of `Message` carrying the fields the chat-list preview reads
@@ -104,6 +108,8 @@ extension CachedChat {
         self.avatarSmallFileId = chat.photo?.small.id
         self.avatarMini = chat.photo?.minithumbnail?.data
         self.unreadMentionCount = chat.unreadMentionCount
+        self.isMarkedAsUnread = chat.isMarkedAsUnread
+        self.notificationSettings = chat.notificationSettings
     }
 
     static func extractDraftText(_ draft: DraftMessage?) -> String? {

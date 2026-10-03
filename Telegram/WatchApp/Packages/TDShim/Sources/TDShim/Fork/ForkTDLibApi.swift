@@ -234,15 +234,18 @@ public enum ForkUpdate: Decodable {
     case chatUnreadMentionCount(chatId: Int64, unreadMentionCount: Int)
     /// A mention was read.
     case messageMentionRead(chatId: Int64, messageId: Int64, unreadMentionCount: Int)
+    /// A chat was marked as unread, or the mark was cleared.
+    case chatIsMarkedAsUnread(chatId: Int64, isMarkedAsUnread: Bool)
     case other
 
     private enum Kind: String {
         case updateMessageInteractionInfo, updateChatUnreadMentionCount, updateMessageMentionRead
+        case updateChatIsMarkedAsUnread
     }
 
     private enum CodingKeys: String, CodingKey {
         case type = "@type"
-        case chatId, messageId, interactionInfo, unreadMentionCount
+        case chatId, messageId, interactionInfo, unreadMentionCount, isMarkedAsUnread
     }
 
     public init(from decoder: Decoder) throws {
@@ -264,6 +267,11 @@ public enum ForkUpdate: Decodable {
                 chatId: try c.decode(Int64.self, forKey: .chatId),
                 messageId: try c.decode(Int64.self, forKey: .messageId),
                 unreadMentionCount: try c.decode(Int.self, forKey: .unreadMentionCount)
+            )
+        case .updateChatIsMarkedAsUnread:
+            self = .chatIsMarkedAsUnread(
+                chatId: try c.decode(Int64.self, forKey: .chatId),
+                isMarkedAsUnread: try c.decode(Bool.self, forKey: .isMarkedAsUnread)
             )
         case nil:
             self = .other

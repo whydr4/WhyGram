@@ -58,6 +58,11 @@ struct ChatRowView: View {
                     .background(Circle().fill(Color.accentColor))
                     .foregroundStyle(.white)
             }
+            if row.unreadCount == 0 && row.isMarkedAsUnread {
+                Circle()
+                    .fill(row.isMuted ? Color.gray : Color.accentColor)
+                    .frame(width: 12, height: 12)
+            }
             if row.unreadCount > 0 {
                 Text("\(row.unreadCount)")
                     .font(.caption2)

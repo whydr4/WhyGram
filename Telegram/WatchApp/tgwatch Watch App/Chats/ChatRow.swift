@@ -20,6 +20,8 @@ struct ChatRow: Identifiable, Equatable, Hashable {
     var isUnreadOutgoing: Bool = false
     /// Unread messages mentioning the user.
     var unreadMentionCount: Int = 0
+    /// The user marked the chat as unread.
+    var isMarkedAsUnread: Bool = false
 
     /// Compacts the store's chat cache into a sorted `[ChatRow]`. Chats without a position
     /// in `currentFolder` are dropped. Sort: highest `order` first, which naturally puts
@@ -69,7 +71,8 @@ struct ChatRow: Identifiable, Equatable, Hashable {
                 lastMessageDate: entry.chat.lastMessage?.date,
                 avatar: avatarVisual(for: entry.chat, fileLocals: fileLocals, selfUserId: selfUserId),
                 isUnreadOutgoing: isUnreadOutgoing,
-                unreadMentionCount: entry.chat.unreadMentionCount
+                unreadMentionCount: entry.chat.unreadMentionCount,
+                isMarkedAsUnread: entry.chat.isMarkedAsUnread
             )
         }
     }
