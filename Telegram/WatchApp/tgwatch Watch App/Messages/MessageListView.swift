@@ -149,7 +149,7 @@ struct MessageListView: View {
             }
             .padding()
         default:
-            // ScrollViewReader wraps the VStack so the initial-position `.task`,
+            // ScrollViewReader wraps the list so the initial-position `.task`,
             // loadOlder scroll-preservation, and tail auto-scroll handlers can capture
             // `proxy` and call `proxy.scrollTo(...)`.
             ScrollViewReader { proxy in
@@ -188,7 +188,10 @@ struct MessageListView: View {
                         .padding(.top, 2)
                     }
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
+                        // Lazy so only rows near the viewport are built: with a plain VStack
+                        // every loaded message was laid out on each update, which made long
+                        // sessions sluggish on the watch.
+                        LazyVStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(store.rows.enumerated()), id: \.element.id) { idx, messageRow in
                                 MessageRowView(
                                     row: messageRow,
@@ -238,7 +241,7 @@ struct MessageListView: View {
                             // the ScrollView below — without that, the system bottom safe-area
                             // adds extra space and the total inset overshoots. Carried as an
                             // id'd zero-content spacer (not `.padding(.bottom, 19)` on the
-                            // VStack) so it's part of the scrollable content and
+                            // stack) so it's part of the scrollable content and
                             // `proxy.scrollTo("bottomAnchor", .bottom)` reaches the TRUE
                             // content bottom — anchoring to the ReplyBar instead stops 19pt
                             // short, landing the chat just above the real tail.
@@ -303,13 +306,12 @@ struct MessageListView: View {
                         //
                         // We drive BOTH the unread (→ divider, `.top`) and the read (→ tail,
                         // `.bottom`) cases imperatively. We do NOT use
-                        // `.defaultScrollAnchor(.bottom)`: on a non-lazy `VStack` it latches
-                        // the bottom offset at the first, too-short layout and reverts to that
-                        // stale offset as content grows — landing ~1 screen above the true
-                        // tail. We use `proxy.scrollTo` rather than `scrollPosition(id:)`
-                        // because the content is a plain (non-lazy) `VStack` —
-                        // `scrollPosition(id:)` only positions reliably inside lazy stacks, and
-                        // switching to `LazyVStack` reintroduces the over-scroll gotcha.
+                        // `.defaultScrollAnchor(.bottom)`: it latches the bottom offset at the
+                        // first, too-short layout and reverts to that stale offset as content
+                        // grows — landing ~1 screen above the true tail. In the lazy stack the
+                        // heights of rows that haven't been built yet are estimates, which makes
+                        // the first `scrollTo` land short in the same way; the re-pin loop
+                        // below absorbs both.
                         //
                         // The hard part is TIMING: bubble heights settle a few frames AFTER
                         // first layout — media (photos, videos, maps, stickers) async-size well
