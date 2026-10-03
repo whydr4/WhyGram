@@ -24,6 +24,9 @@ struct MessageRowView: View {
                 if index <= 8 { onEnterTopEdge?() }
                 if index >= count - 9 { onEnterBottomEdge?() }
             }
+            // The lazy stack destroys rows that scroll far enough away without a
+            // visibility change to false, which left stale ids in the on-screen set.
+            .onDisappear { onVisibilityChange?(row.id, false) }
     }
 
     @ViewBuilder

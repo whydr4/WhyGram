@@ -402,17 +402,28 @@ struct MessageListView: View {
                         isAtBottom = store.window.initialScrollTargetId == nil
                         didApplyInitialScroll = true
                     }
-                    .onChange(of: store.rows.first?.id) { oldId, newId in
+                    // Keyed on the first message, not the first row: that is a day separator,
+                    // which keeps its id when the prepended page is from the same day.
+                    .onChange(of: store.rows.first(where: { $0.messageId != nil })?.id) { oldId, newId in
                         // Older rows were prepended. The scroll view keeps its absolute
                         // offset, which would leave the user looking at the top of the new
-                        // page. Put the topmost row that was on screen back at the top. The
-                        // visibility set still describes the old layout here: callbacks for
-                        // the new layout arrive after this update.
+                        // page. Put the topmost message that was on screen back at the top.
+                        // The visibility set still describes the old layout here: callbacks
+                        // for the new layout arrive after this update. Separators are
+                        // skipped as anchors because a same-day one moves up with the page.
                         guard restoreAfterPrepend, oldId != nil, oldId != newId else { return }
                         restoreAfterPrepend = false
-                        let anchor = store.rows.first(where: { visibleRows.ids.contains($0.id) })?.id ?? oldId
-                        if let anchor { proxy.scrollTo(anchor, anchor: .top) }
-                        DebugTrace.log("prepend restore anchor=\(anchor ?? "nil") visible=\(visibleRows.ids.count)")
+                        let visibleIds = visibleRows.ids
+                        let anchorIndex = store.rows.firstIndex { $0.messageId != nil && visibleIds.contains($0.id) }
+                        guard let anchor = anchorIndex.map({ store.rows[$0].id }) ?? oldId else { return }
+                        proxy.scrollTo(anchor, anchor: .top)
+                        DebugTrace.log("prepend restore anchor=\(anchor) index=\(anchorIndex.map(String.init) ?? "fallback") visible=\(visibleIds.count)")
+                        // Rows built around the anchor may still settle their heights; pin
+                        // it once more after they have been laid out.
+                        Task {
+                            try? await Task.sleep(nanoseconds: 16_000_000)
+                            proxy.scrollTo(anchor, anchor: .top)
+                        }
                     }
                     .onChange(of: jumpToBottomRequest) {
                         scrollToBottom(proxy: proxy)
