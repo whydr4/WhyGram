@@ -75,7 +75,7 @@ final class ChatHistoryStore {
         self.selfUserId = selfUserId
         self.userNames = userNames ?? UserNamesStore()
         self.voicePlayback = voicePlayback ?? VoicePlaybackController(
-            backend: AVEngineBackend(),
+            backend: AudioFilePlayerBackend(),
             decoder: OpusDecoderAdapter()
         )
         self.audioPlayback = audioPlayback ?? AudioPlaybackController(backend: AVPlayerBackend())
@@ -94,6 +94,9 @@ final class ChatHistoryStore {
             unreadDividerAfterId: dividerAfter
         )
         self.loadState = .loadingFirstPage
+        self.voicePlayback.onFinished = { [weak self] voiceFileId in
+            self?.playVoice(after: voiceFileId)
+        }
     }
 
     func start() async {
@@ -509,6 +512,30 @@ final class ChatHistoryStore {
             requestFileDownload(fileId: note.voiceFileId, priority: 2)
         }
         voicePlayback.toggle(note: note)
+    }
+
+    /// Tap on a voice note's waveform: jumps there if the note is playing or
+    /// paused, otherwise behaves like a tap on the play button.
+    func seekPlayback(_ note: VoiceNoteVisual, fraction: Double) {
+        guard voicePlayback.isSeekable(note.voiceFileId) else {
+            togglePlayback(note)
+            return
+        }
+        voicePlayback.seek(voiceFileId: note.voiceFileId, fraction: fraction)
+    }
+
+    /// Auto-advance: when a voice note finishes, play the next voice note below
+    /// it in the loaded history (downloading it first if needed).
+    private func playVoice(after voiceFileId: Int) {
+        var passedFinished = false
+        for row in rows {
+            guard case .bubble(let bubble) = row, let voice = bubble.voiceNote else { continue }
+            if passedFinished {
+                togglePlayback(voice)
+                return
+            }
+            if voice.voiceFileId == voiceFileId { passedFinished = true }
+        }
     }
 
     func toggleAudioPlayback(_ audio: AudioVisual) {

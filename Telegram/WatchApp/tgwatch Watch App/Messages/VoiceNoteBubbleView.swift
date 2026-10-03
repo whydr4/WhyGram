@@ -48,6 +48,18 @@ struct VoiceNoteBubbleView: View {
             HStack(spacing: 6) {
                 glyphView
                 WaveformBarsView(amplitudes: amplitudes, progress: progress, isOutgoing: isOutgoing)
+                    .overlay {
+                        // Tap on the waveform seeks while the note is playing or
+                        // paused; otherwise it starts playback like the button.
+                        GeometryReader { geo in
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .gesture(SpatialTapGesture().onEnded { tap in
+                                    guard geo.size.width > 0 else { return }
+                                    store.seekPlayback(note, fraction: tap.location.x / geo.size.width)
+                                })
+                        }
+                    }
                 trailing
             }
             if !caption.isEmpty {
@@ -105,8 +117,22 @@ struct VoiceNoteBubbleView: View {
                     .font(.system(size: 9))
                     .foregroundStyle(style.secondary)
             }
+            if store.voicePlayback.isSeekable(note.voiceFileId) {
+                Button { store.voicePlayback.cycleRate() } label: {
+                    Text(rateLabel(store.voicePlayback.playbackRate))
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(style.secondary.opacity(0.25)))
+                }
+                .buttonStyle(.plain)
+            }
         }
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func rateLabel(_ rate: Float) -> String {
+        rate == rate.rounded() ? "\(Int(rate))×" : "\(rate.formatted(.number.precision(.fractionLength(1))))×"
     }
 
 }

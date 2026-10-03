@@ -11,6 +11,16 @@ protocol VoicePlaybackBackend: AnyObject {
     func stop()
     var elapsed: Double { get }
     var lastBufferDuration: Double { get }
+    /// Moves playback to `fraction` (0…1) of the current buffer, keeping the
+    /// playing/paused state.
+    func seek(toFraction fraction: Double)
+    /// Playback speed; pitch is preserved.
+    func setRate(_ rate: Float)
+}
+
+extension VoicePlaybackBackend {
+    func seek(toFraction fraction: Double) {}
+    func setRate(_ rate: Float) {}
 }
 
 protocol VoiceDecoder: Sendable {
@@ -39,6 +49,14 @@ final class VoicePlaybackController {
     /// Observable progress tick that drives the bubble's waveform fill during
     /// playback. Updated by `startTicker(tok:)` while in `.playing`.
     private(set) var currentProgress: Double = 0
+    /// Playback speed shared by every voice note, persisted across launches.
+    private(set) var playbackRate: Float
+    /// Called with the voice file id when a note plays to its end (not on
+    /// pause, stop or tear-down). The chat uses it to start the next note.
+    var onFinished: ((Int) -> Void)?
+
+    private static let rateKey = "voicePlaybackRate"
+    private static let rates: [Float] = [1, 1.5, 2]
 
     private let backend: VoicePlaybackBackend
     private let decoder: VoiceDecoder
@@ -51,6 +69,32 @@ final class VoicePlaybackController {
     init(backend: VoicePlaybackBackend, decoder: VoiceDecoder) {
         self.backend = backend
         self.decoder = decoder
+        let saved = UserDefaults.standard.float(forKey: Self.rateKey)
+        self.playbackRate = Self.rates.contains(saved) ? saved : 1
+    }
+
+    /// True while `voiceFileId` is playing or paused, i.e. when seeking applies.
+    func isSeekable(_ voiceFileId: Int) -> Bool {
+        switch state {
+        case .playing(let id), .paused(let id): return id == voiceFileId
+        default: return false
+        }
+    }
+
+    /// Steps the speed 1× → 1.5× → 2× → 1×; applies to the current note immediately.
+    func cycleRate() {
+        let index = Self.rates.firstIndex(of: playbackRate) ?? 0
+        playbackRate = Self.rates[(index + 1) % Self.rates.count]
+        UserDefaults.standard.set(playbackRate, forKey: Self.rateKey)
+        backend.setRate(playbackRate)
+    }
+
+    /// Jumps the playing or paused note to `fraction` (0…1). No-op otherwise.
+    func seek(voiceFileId: Int, fraction: Double) {
+        guard isSeekable(voiceFileId) else { return }
+        let clamped = min(max(fraction, 0), 1)
+        backend.seek(toFraction: clamped)
+        currentProgress = clamped
     }
 
     func isActive(_ voiceFileId: Int) -> Bool {
@@ -85,7 +129,6 @@ final class VoicePlaybackController {
         decodeTask = nil
         currentProgress = 0
         backend.stop()
-        (backend as? AVEngineBackend)?.dropEngine()
         state = .idle
     }
 
@@ -159,6 +202,7 @@ final class VoicePlaybackController {
         guard tok == activeTok else { return }
         do {
             try backend.prepare()
+            backend.setRate(playbackRate)
             try backend.play(buffer: decoded.pcm) { [weak self] in
                 self?.handlePlaybackEnded(tok: tok, voiceFileId: note.voiceFileId)
             }
@@ -181,6 +225,7 @@ final class VoicePlaybackController {
         currentProgress = 0
         backend.stop()
         state = .idle
+        onFinished?(voiceFileId)
     }
 
     /// Drives `currentProgress` updates at 20 Hz so the bubble's waveform fill
@@ -205,79 +250,100 @@ final class VoicePlaybackController {
 
 // MARK: - Production wiring
 
+/// Plays a decoded note with AVAudioPlayer. watchOS has no AVAudioUnitTimePitch, but
+/// AVAudioPlayer offers a pitch-preserving `rate` and seeking via `currentTime`. It
+/// can't read Opus, so the decoded PCM is first written to a temporary CAF file.
 @MainActor
-final class AVEngineBackend: VoicePlaybackBackend {
+final class AudioFilePlayerBackend: NSObject, VoicePlaybackBackend {
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private var attached = false
-    private var connectedFormat: AVAudioFormat?
-    private(set) var lastBufferDuration: Double = 0
-    private var lastSampleRate: Double = 48000
+    private struct PlaybackFailed: Error {}
+
+    private var player: AVAudioPlayer?
+    private var fileURL: URL?
     private var pendingCompletion: (@MainActor () -> Void)?
+    private var rate: Float = 1
+    private(set) var lastBufferDuration: Double = 0
 
-    var elapsed: Double {
-        guard let nodeTime = player.lastRenderTime,
-              let playerTime = player.playerTime(forNodeTime: nodeTime) else {
-            return 0
-        }
-        return Double(playerTime.sampleTime) / lastSampleRate
-    }
+    var elapsed: Double { player?.currentTime ?? 0 }
 
-    func prepare() throws {
-        if !attached {
-            engine.attach(player)
-            attached = true
-        }
-    }
+    func prepare() throws {}
 
     func play(buffer: AVAudioPCMBuffer, completion: @escaping @MainActor () -> Void) throws {
-        // AVAudioPlayerNode rejects buffers whose format differs from the player's
-        // output connection format. Telegram voice notes are typically mono; the
-        // smoke-test fixture is stereo. Reconnect on every format change so both
-        // sources play back without raising NSInternalInconsistencyException.
-        let bufFmt = buffer.format
-        if connectedFormat == nil || connectedFormat?.isEqual(bufFmt) == false {
-            if connectedFormat != nil {
-                engine.disconnectNodeOutput(player)
-            }
-            engine.connect(player, to: engine.mainMixerNode, format: bufFmt)
-            connectedFormat = bufFmt
-        }
-        if !engine.isRunning {
-            try engine.start()
-        }
-        lastSampleRate = bufFmt.sampleRate
-        lastBufferDuration = Double(buffer.frameLength) / lastSampleRate
+        stop()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-\(UUID().uuidString).caf")
+        // 16-bit PCM keeps the file small; AVAudioFile converts from the decoder's
+        // float32 processing format on write.
+        let fileSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: buffer.format.sampleRate,
+            AVNumberOfChannelsKey: buffer.format.channelCount,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        let file = try AVAudioFile(
+            forWriting: url, settings: fileSettings,
+            commonFormat: buffer.format.commonFormat, interleaved: buffer.format.isInterleaved
+        )
+        try file.write(from: buffer)
+        file.close()
+        fileURL = url
+
+        // Like music playback: watchOS routes audio to the speaker only under an
+        // active `.playback` session.
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+
+        let player = try AVAudioPlayer(contentsOf: url)
+        player.delegate = self
+        player.enableRate = true
+        player.rate = rate
+        guard player.prepareToPlay(), player.play() else { throw PlaybackFailed() }
+        self.player = player
+        lastBufferDuration = player.duration
         pendingCompletion = completion
-        let captured = completion
-        player.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
-            // AVAudioEngine fires this on a non-main queue.
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard self.pendingCompletion != nil else { return }
-                self.pendingCompletion = nil
-                captured()
-            }
-        }
-        player.play()
     }
 
-    func pause()  { player.pause() }
-    func resume() { player.play() }
+    func pause()  { player?.pause() }
+    func resume() { player?.play() }
 
     func stop() {
         pendingCompletion = nil
-        player.stop()
-        // Leave engine running between toggles within the same chat — saves a
-        // hardware re-prepare. Stopped on tearDown via dropEngine().
+        player?.stop()
+        player = nil
+        if let url = fileURL {
+            try? FileManager.default.removeItem(at: url)
+            fileURL = nil
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
-    /// Stops the engine entirely. Called from VoicePlaybackController.tearDown
-    /// via the controller's stop path; safe to call repeatedly.
-    func dropEngine() {
-        player.stop()
-        if engine.isRunning { engine.stop() }
+    func seek(toFraction fraction: Double) {
+        guard let player else { return }
+        // Stay a hair before the end so a seek to 100% still finishes normally.
+        player.currentTime = min(max(fraction, 0), 0.999) * player.duration
+    }
+
+    func setRate(_ rate: Float) {
+        self.rate = rate
+        player?.rate = rate
+    }
+
+    fileprivate func playerFinished(_ finished: ObjectIdentifier) {
+        guard let player, ObjectIdentifier(player) == finished,
+              let completion = pendingCompletion else { return }
+        pendingCompletion = nil
+        completion()
+    }
+}
+
+extension AudioFilePlayerBackend: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let finished = ObjectIdentifier(player)
+        Task { @MainActor in self.playerFinished(finished) }
     }
 }
 

@@ -31,7 +31,7 @@ struct VoiceRecordView: View {
         self.onComplete = onComplete
         _recorder = State(wrappedValue: VoiceRecorder(backend: AVRecordingBackend()))
         _playback = State(wrappedValue: VoicePlaybackController(
-            backend: AVEngineBackend(), decoder: OpusDecoderAdapter()))
+            backend: AudioFilePlayerBackend(), decoder: OpusDecoderAdapter()))
     }
 
     var body: some View {
