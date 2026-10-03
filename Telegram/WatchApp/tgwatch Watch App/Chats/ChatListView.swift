@@ -12,12 +12,11 @@ struct ChatListView: View {
     /// ScrollView (where rotation has no useful effect). watchOS otherwise routes
     /// the crown to the most-recently-interacted scrollable.
     @FocusState private var listFocused: Bool
-    /// The app title shows only while the list sits at its top and fades out once the
-    /// user scrolls down, instead of staying pinned next to the clock.
+    /// The app title shows only while the list's first row (the folder pills, or the
+    /// first chat when there are no folders) is on screen, and fades out once it
+    /// scrolls away. Row visibility is used instead of scroll offsets, which shift with
+    /// the tucked-under pill row and with rubber-band overscroll.
     @State private var titleHidden = false
-    /// Smallest scroll offset seen, i.e. the list's resting top. Measured instead of
-    /// assumed, because the pill row is tucked under the bar with a negative inset.
-    @State private var topScrollOffset: CGFloat?
 
     var body: some View {
         NavigationStack {
@@ -68,6 +67,7 @@ struct ChatListView: View {
                     listFocused = true
                 })
                 .id("folderPillBarRow")
+                .onScrollVisibilityChange(threshold: 0.3) { setTitleVisible($0) }
                 // Negative bottom inset compresses the natural ~23pt gap between
                 // the pill row and the first chat row down to ~8pt.
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: -15, trailing: 0))
@@ -96,17 +96,14 @@ struct ChatListView: View {
                     }
                     .buttonStyle(.plain)
                     .onAppear { store.ensureChatsLoaded(near: idx) }
+                    .onScrollVisibilityChange(threshold: 0.3) { visible in
+                        // Without folder pills the first chat is the list's top row.
+                        if idx == 0, store.pills.count <= 1 { setTitleVisible(visible) }
+                    }
                 }
             }
         }
         .listStyle(.plain)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
-            let top = min(topScrollOffset ?? offset, offset)
-            topScrollOffset = top
-            let hidden = offset - top > 10
-            guard hidden != titleHidden else { return }
-            withAnimation(.easeInOut(duration: 0.25)) { titleHidden = hidden }
-        }
         .focused($listFocused)
         .onAppear { listFocused = true }
         // Bar is intentionally visible (forced by `.toolbar(.visible, for:
@@ -116,6 +113,11 @@ struct ChatListView: View {
         // between the bar and the pill row. Plain chat rows (no pills) sit at
         // the natural top.
         .padding(.top, store.pills.count > 1 ? -20 : 0)
+    }
+
+    private func setTitleVisible(_ visible: Bool) {
+        guard titleHidden == visible else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { titleHidden = !visible }
     }
 
     private func makeHistoryStore(for row: ChatRow) -> ChatHistoryStore? {
