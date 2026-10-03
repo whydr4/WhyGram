@@ -52,6 +52,9 @@ struct ChatListView: View {
         // loading/empty/populated transitions means the FolderPillBar row keeps its
         // SwiftUI identity — and its inner horizontal ScrollView keeps its offset —
         // across folder switches.
+        #if DEBUG
+        let _ = RenderCounter.bump("chatListBody")
+        #endif
         let folderLoadState = store.loadState(for: store.currentFolder)
         List {
             // The app title (and the folder pills under it) as the list's first row
@@ -110,7 +113,11 @@ struct ChatListView: View {
         }
         .listStyle(.plain)
         .focused($listFocused)
-        .onAppear { listFocused = true }
+        .onAppear {
+            listFocused = true
+            store.setVisible(true)
+        }
+        .onDisappear { store.setVisible(false) }
     }
 
     private func makeHistoryStore(for row: ChatRow) -> ChatHistoryStore? {

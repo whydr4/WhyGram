@@ -44,8 +44,13 @@ enum RenderCounter {
     private static var counts: [String: Int] = [:]
     private static var flushScheduled = false
 
-    static func bump(_ name: String) {
-        counts[name, default: 0] += 1
+    /// Adds `by` to the counter, or keeps the largest value seen with `max`.
+    static func bump(_ name: String, by: Int = 1, max: Bool = false) {
+        if max {
+            counts[name] = Swift.max(counts[name] ?? 0, by)
+        } else {
+            counts[name, default: 0] += by
+        }
         guard !flushScheduled else { return }
         flushScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {

@@ -56,6 +56,13 @@ final class ChatListStore {
     /// `handle → assert` ergonomics.
     private let coalesceUpdates: Bool
     private var reprojectPending = false
+    /// How long coalesced updates gather before one projection. Each projection sorts
+    /// every cached chat and sums unread counts per folder, which a busy account
+    /// (hundreds of chats) would otherwise redo dozens of times a second.
+    private static let coalesceDelay: DispatchTimeInterval = .milliseconds(200)
+    /// False while the list is covered (a chat is open). Updates then only mark it
+    /// stale, and it is projected once when it shows again.
+    private var isVisible = true
 
     #if DEBUG
     /// Number of times `reproject()` has actually run. Test-only hook for
@@ -294,11 +301,19 @@ final class ChatListStore {
         }
         guard !reprojectPending else { return }
         reprojectPending = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard self.reprojectPending else { return }
+        guard isVisible else { return }   // projected by setVisible(true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.coalesceDelay) { [weak self] in
+            guard let self, self.isVisible, self.reprojectPending else { return }
             self.reproject()
         }
+    }
+
+    /// The chat list view reports when it's on screen. While a chat covers it, updates
+    /// only mark it stale; it catches up in one projection when it shows again.
+    func setVisible(_ visible: Bool) {
+        guard isVisible != visible else { return }
+        isVisible = visible
+        if visible && reprojectPending { reproject() }
     }
 
     #if DEBUG
@@ -313,9 +328,15 @@ final class ChatListStore {
         reprojectPending = false
         #if DEBUG
         debugReprojectCount += 1
+        let probeStart = Date()
+        defer {
+            RenderCounter.bump("chatListReproject")
+            RenderCounter.bump("chatListReprojectMs", by: Int(Date().timeIntervalSince(probeStart) * 1000))
+            RenderCounter.bump("chatListCached", by: chatCache.count, max: true)
+        }
         #endif
         let limit = displayLimits[ChatListKey(currentFolder)] ?? initialDisplayLimit
-        chats = ChatRow.project(
+        let newChats = ChatRow.project(
             chats: chatCache,
             userNames: userNames.names,
             selfUserId: selfUserId,
@@ -323,12 +344,16 @@ final class ChatListStore {
             limit: limit,
             fileLocals: files
         )
-        pills = FolderPill.project(
+        let newPills = FolderPill.project(
             chats: chatCache,
             folders: folders,
             mainChatListPosition: mainChatListPosition,
             currentFolder: currentFolder
         )
+        // Most updates touch chats outside the shown slice; assigning an equal value
+        // would still re-render the list.
+        if newChats != chats { chats = newChats }
+        if newPills != pills { pills = newPills }
     }
 
     /// Count of cached chats with a position in `folder`. Used to decide whether the
