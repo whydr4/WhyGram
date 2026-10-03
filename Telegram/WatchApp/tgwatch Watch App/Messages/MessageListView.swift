@@ -372,7 +372,10 @@ struct MessageListView: View {
                         // This runs on every scroll frame: write state only when it
                         // changes, or each frame re-renders the whole list.
                         let atBottom = new.contentOffsetY >= bottomOffset - 8
-                        if isAtBottom != atBottom { isAtBottom = atBottom }
+                        if isAtBottom != atBottom {
+                            isAtBottom = atBottom
+                            DebugTrace.log(String(format: "atBottom=%@ off=%.1f max=%.1f size=%.1f container=%.1f insets=%.1f/%.1f", atBottom ? "true" : "false", new.contentOffsetY, bottomOffset, new.contentSizeH, new.containerSizeH, new.topInset, new.bottomInset))
+                        }
                         // contentSize-stable changes imply user-driven scroll; arm
                         // pagination so it only fires after the user actually moved.
                         if !userHasScrolled { userHasScrolled = true }

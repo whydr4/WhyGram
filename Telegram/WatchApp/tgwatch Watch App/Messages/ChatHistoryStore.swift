@@ -267,6 +267,8 @@ final class ChatHistoryStore {
     private var olderFailureStreak = 0
     private var newerFailureStreak = 0
     private static let paginationLimit = 30
+    /// Most messages kept in memory while paging up (five pages).
+    private static let windowLimit = 150
     private static let failureStreakCap = 3
 
     /// Loads the page above the window. `beforeApply` runs once the page has arrived and
@@ -283,6 +285,13 @@ final class ChatHistoryStore {
             await beforeApply()
             for m in messages { primeFiles(from: m.content) }
             window.extendOlder(messages.map(CachedMessage.init))
+            // The dropped newest rows sit far below the viewport, so this doesn't move
+            // what's on screen.
+            let dropped = window.trimNewest(keeping: Self.windowLimit)
+            if dropped > 0 {
+                logger.info("loadOlder trimmed newest=\(dropped, privacy: .public)")
+                DebugTrace.log("loadOlder trimmed newest=\(dropped) window=\(window.cache.count) tail=\(window.reachesChatTail)")
+            }
             olderFailureStreak = 0
             logger.info("loadOlder chatId=\(self.chatId, privacy: .public) returned=\(messages.count, privacy: .public)")
             reproject()
@@ -418,16 +427,24 @@ final class ChatHistoryStore {
 
     // MARK: - Send / draft
 
+    /// Sending lands at the chat's tail. When the window was moved away from it (a reply
+    /// jump, or older pages trimming the newest), reload the tail first, so the sent
+    /// message doesn't sit right after older ones with the messages between unloaded.
+    /// If that can't happen now, mark the window as reaching the tail anyway (the
+    /// previous behavior) so the sent message still shows.
+    private func pullToTail() async {
+        if !window.reachesChatTail { await jumpToBottom() }
+        window.markReachesChatTail()
+        unseenNewerCount = 0
+    }
+
     func sendText(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lastSendError = nil
-        // Pull-to-tail: sending implicitly means "user is at the bottom".
-        // Anything beyond the current loaded window is no longer a "gap" from the
-        // user's perspective, so we flip reachesChatTail and clear the counter
-        // BEFORE the optimistic updateNewMessage from sendMessage lands.
-        window.markReachesChatTail()
-        unseenNewerCount = 0
+        // Pull-to-tail: sending implicitly means "user is at the bottom". Done BEFORE
+        // the optimistic updateNewMessage from sendMessage lands.
+        await pullToTail()
         do {
             _ = try await loader.sendText(chatId: chatId, text: trimmed)
         } catch {
@@ -438,8 +455,7 @@ final class ChatHistoryStore {
 
     func sendVoiceNote(_ draft: VoiceRecordingDraft) async -> Bool {
         lastSendError = nil
-        window.markReachesChatTail()
-        unseenNewerCount = 0
+        await pullToTail()
         do {
             _ = try await loader.sendVoiceNote(
                 chatId: chatId,
@@ -459,8 +475,7 @@ final class ChatHistoryStore {
     /// Mirrors `sendVoiceNote`: pull-to-tail, clear unseen, capture error.
     func sendSticker(_ sticker: PickerSticker) async -> Bool {
         lastSendError = nil
-        window.markReachesChatTail()
-        unseenNewerCount = 0
+        await pullToTail()
         do {
             _ = try await loader.sendSticker(
                 chatId: chatId,
@@ -481,8 +496,7 @@ final class ChatHistoryStore {
     /// Mirrors `sendSticker`: pull-to-tail, clear unseen, capture error.
     func sendLocation(latitude: Double, longitude: Double) async -> Bool {
         lastSendError = nil
-        window.markReachesChatTail()
-        unseenNewerCount = 0
+        await pullToTail()
         do {
             _ = try await loader.sendLocation(chatId: chatId, latitude: latitude, longitude: longitude)
             return true

@@ -142,6 +142,22 @@ struct MessageWindow: Equatable {
 
     mutating func markHasOlderFalse() { hasOlder = false }
 
+    /// Drops the newest messages beyond `maxCount`, so paging far up through history
+    /// doesn't keep every page in memory. Dropping from the newest end keeps the window
+    /// contiguous; it no longer reaches the chat tail, so newer pages load again on the
+    /// way back down. Returns how many were dropped.
+    @discardableResult
+    mutating func trimNewest(keeping maxCount: Int) -> Int {
+        let excess = cache.count - maxCount
+        guard excess > 0 else { return 0 }
+        for id in cache.keys.sorted(by: >).prefix(excess) {
+            cache.removeValue(forKey: id)
+        }
+        recomputeBounds()
+        reachesChatTail = false
+        return excess
+    }
+
     // MARK: - Internals
 
     private mutating func recomputeBounds() {
