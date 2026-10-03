@@ -204,12 +204,19 @@ private func photoVisual(for content: MessageContent, fileLocals: [Int: File]) -
     let fileId = size.photo.id
     let file = fileLocals[fileId] ?? size.photo
     let localPath: String? = (file.local.isDownloadingCompleted && !file.local.path.isEmpty) ? file.local.path : nil
+    var full: FullPhoto? = nil
+    if let big = selectFullPhotoSize(m.photo.sizes), big.photo.id != fileId, big.width > size.width {
+        let bigFile = fileLocals[big.photo.id] ?? big.photo
+        let bigPath: String? = (bigFile.local.isDownloadingCompleted && !bigFile.local.path.isEmpty) ? bigFile.local.path : nil
+        full = FullPhoto(fileId: big.photo.id, localPath: bigPath)
+    }
     return PhotoVisual(
         fileId: fileId,
         width: size.width,
         height: size.height,
         minithumbnail: m.photo.minithumbnail?.data,
-        localPath: localPath
+        localPath: localPath,
+        full: full
     )
 }
 

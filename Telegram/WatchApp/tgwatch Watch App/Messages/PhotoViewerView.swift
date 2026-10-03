@@ -1,3 +1,4 @@
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -8,11 +9,17 @@ import UIKit
 /// While zoomed in, dragging pans the photo; at 1× the drag gesture is disabled so the
 /// sheet's swipe-down dismiss keeps working.
 ///
+/// Sharpness: the chat bubble's ~320px variant is shown first, while the larger
+/// `photo.full` variant (≤1280px) downloads; it replaces the small one once ready.
+/// The download is cancelled if the viewer closes first.
+///
 /// Assumes `photo.localPath != nil` (the tap that presents this sheet is gated on
 /// download completion).
 struct PhotoViewerView: View {
     let photo: PhotoVisual
 
+    @Environment(ChatHistoryStore.self) private var store
+    @State private var fullImage: UIImage?
     @State private var zoom: Double = 1
     @State private var offset: CGSize = .zero
     @State private var dragStartOffset: CGSize = .zero
@@ -41,6 +48,25 @@ struct PhotoViewerView: View {
                 dragStartOffset = offset
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if photo.full != nil, fullImage == nil {
+                ProgressView().controlSize(.mini).padding(6)
+            }
+        }
+        .task(id: fullPath) {
+            guard let path = fullPath else { return }
+            fullImage = await Self.downsampledImage(path: path, maxPixelSize: 1280)
+        }
+        .onAppear {
+            if let full = photo.full, fullPath == nil {
+                store.requestFileDownload(fileId: full.fileId, priority: 16)
+            }
+        }
+        .onDisappear {
+            if let full = photo.full, fullImage == nil {
+                store.cancelFileDownload(fileId: full.fileId)
+            }
+        }
         .focusable()
         .focused($crownFocused)
         .digitalCrownRotation(
@@ -50,9 +76,42 @@ struct PhotoViewerView: View {
         .onAppear { crownFocused = true }
     }
 
+    /// Local path of the sharper variant once downloaded. Read through the store so the
+    /// view updates when the download completes (`photo` is a snapshot).
+    private var fullPath: String? {
+        guard let full = photo.full else { return nil }
+        if let file = store.fileSnapshot(fileId: full.fileId),
+           file.local.isDownloadingCompleted, !file.local.path.isEmpty {
+            return file.local.path
+        }
+        return full.localPath
+    }
+
+    /// Decodes off the main thread, scaled so the longer side is at most `maxPixelSize`.
+    private static func downsampledImage(path: String, maxPixelSize: Int) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            let url = URL(fileURLWithPath: path) as CFURL
+            guard let source = CGImageSourceCreateWithURL(url, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+                return nil
+            }
+            let options = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            ] as CFDictionary
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+            return UIImage(cgImage: cgImage)
+        }.value
+    }
+
     @ViewBuilder
     private var image: some View {
-        if let path = photo.localPath, let img = UIImage(contentsOfFile: path) {
+        if let fullImage {
+            Image(uiImage: fullImage)
+                .resizable()
+                .scaledToFit()
+        } else if let path = photo.localPath, let img = UIImage(contentsOfFile: path) {
             Image(uiImage: img)
                 .resizable()
                 .scaledToFit()

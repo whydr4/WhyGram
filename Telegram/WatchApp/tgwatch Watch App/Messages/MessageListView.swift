@@ -68,7 +68,7 @@ struct MessageListView: View {
             }
         }
         .sheet(item: $presentedPhoto) { photo in
-            PhotoViewerView(photo: photo)
+            PhotoViewerView(photo: photo).environment(store)
         }
         .sheet(item: $presentedVideo) { video in
             VideoPlayerView(video: video).environment(store)
