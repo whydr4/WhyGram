@@ -1,5 +1,4 @@
 import SwiftUI
-import WatchKit
 
 private struct ScrollSnapshot: Equatable {
     let contentOffsetY: CGFloat
@@ -41,13 +40,19 @@ struct MessageListView: View {
     @State private var userHasScrolled: Bool = false
     // Hard cool-down after each loadOlder/loadNewer. Without this, the row-visibility
     // callbacks for newly-prepended rows fire IMMEDIATELY after `reproject()` and re-
-    // trigger pagination before the anchored row is back in place. The cool-down lets
-    // the prepended rows settle off-screen before the next pagination is allowed; it is
+    // trigger pagination before the viewport is restored. The cool-down lets the
+    // prepended rows settle off-screen before the next pagination is allowed; it is
     // short because paging now starts several rows before the edge.
     @State private var canPaginate: Bool = true
     private static let paginationCooldownNs: UInt64 = 300_000_000
-    /// Id of the row at the top of the viewport (`.scrollPosition`).
-    @State private var scrollAnchorId: String?
+    /// Rows currently on screen, fed by each row's visibility callback. Read when older
+    /// rows are prepended, to keep the row the user was looking at in place.
+    @State private var visibleRows = VisibleRowTracker()
+    /// Set while an older page loads, so the prepend that follows restores the viewport
+    /// (and a window rebuild by a reply jump doesn't).
+    @State private var restoreAfterPrepend = false
+    /// Bumped by the jump-to-bottom toolbar button; handled inside the ScrollViewReader.
+    @State private var jumpToBottomRequest = 0
     /// Row briefly highlighted after jumping to it from a reply header.
     @State private var highlightedRowId: String?
     /// Incoming messages that arrived below the viewport while the user was scrolled
@@ -74,6 +79,20 @@ struct MessageListView: View {
                     size: 36
                 )
                 .glassEffect(in: Circle())
+            }
+            // In the system bottom bar: an overlay button over the chat never received
+            // taps on the watch (confirmed with the on-device trace).
+            if showsJumpToBottom {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Spacer()
+                    Button {
+                        jumpToBottomRequest += 1
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .overlay(alignment: .topTrailing) { unseenBadge }
+                    .accessibilityIdentifier("jumpToBottom")
+                }
             }
         }
         .sheet(item: $presentedPhoto) { photo in
@@ -213,23 +232,13 @@ struct MessageListView: View {
                                     onEnterTopEdge: {
                                         guard userHasScrolled, canPaginate else { return }
                                         canPaginate = false
-                                        // Row at the top of the viewport before older rows are
-                                        // prepended; the view must stay on it afterwards.
-                                        let anchorBefore = scrollAnchorId
-                                        DebugTrace.log("loadOlder trigger row=\(idx) rows=\(store.rows.count) anchor=\(anchorBefore ?? "nil")")
+                                        restoreAfterPrepend = true
+                                        DebugTrace.log("loadOlder trigger row=\(idx) rows=\(store.rows.count) visible=\(visibleRows.ids.count)")
                                         Task {
                                             await store.loadOlder()
-                                            try? await Task.sleep(nanoseconds: 32_000_000)
-                                            let anchorAfter = scrollAnchorId
-                                            DebugTrace.log("loadOlder done rows=\(store.rows.count) anchor=\(anchorAfter ?? "nil")")
-                                            // `scrollPosition` normally keeps the anchored row in place
-                                            // across the prepend. If the view drifted onto the new rows
-                                            // instead, put the anchored row back at the top.
-                                            if let anchorBefore, anchorAfter != anchorBefore {
-                                                proxy.scrollTo(anchorBefore, anchor: .top)
-                                                DebugTrace.log("loadOlder restored anchor")
-                                            }
+                                            DebugTrace.log("loadOlder done rows=\(store.rows.count)")
                                             try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
+                                            restoreAfterPrepend = false
                                             canPaginate = true
                                         }
                                     },
@@ -243,6 +252,9 @@ struct MessageListView: View {
                                             try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
                                             canPaginate = true
                                         }
+                                    },
+                                    onVisibilityChange: { id, visible in
+                                        if visible { visibleRows.ids.insert(id) } else { visibleRows.ids.remove(id) }
                                     },
                                     onIncomingBubbleVisible: { id in
                                         guard id > store.unreadDividerAfterIdSnapshot else { return }
@@ -280,13 +292,9 @@ struct MessageListView: View {
                                 .frame(height: 19)
                                 .id("bottomAnchor")
                         }
-                        .scrollTargetLayout()
                         .padding(.horizontal, 4)
                         .padding(.top, 4)
                     }
-                    // Tracks the row at the top of the viewport, and makes the scroll view
-                    // keep that row in place when older rows are prepended above it.
-                    .scrollPosition(id: $scrollAnchorId, anchor: .top)
                     .ignoresSafeArea(edges: .bottom)
                     .scrollContentBackground(.hidden)
                     .background {
@@ -394,6 +402,21 @@ struct MessageListView: View {
                         isAtBottom = store.window.initialScrollTargetId == nil
                         didApplyInitialScroll = true
                     }
+                    .onChange(of: store.rows.first?.id) { oldId, newId in
+                        // Older rows were prepended. The scroll view keeps its absolute
+                        // offset, which would leave the user looking at the top of the new
+                        // page. Put the topmost row that was on screen back at the top. The
+                        // visibility set still describes the old layout here: callbacks for
+                        // the new layout arrive after this update.
+                        guard restoreAfterPrepend, oldId != nil, oldId != newId else { return }
+                        restoreAfterPrepend = false
+                        let anchor = store.rows.first(where: { visibleRows.ids.contains($0.id) })?.id ?? oldId
+                        if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                        DebugTrace.log("prepend restore anchor=\(anchor ?? "nil") visible=\(visibleRows.ids.count)")
+                    }
+                    .onChange(of: jumpToBottomRequest) {
+                        scrollToBottom(proxy: proxy)
+                    }
                     .onChange(of: store.rows.last?.id) { _, newId in
                         // Telegram convention: outgoing always pulls to bottom; incoming only
                         // pulls if the user was already parked there. Only auto-scroll when we
@@ -418,18 +441,6 @@ struct MessageListView: View {
                         if atBottom { newBelowCount = 0 }
                     }
                 }
-                // A sibling above the whole chat (not an overlay of the ScrollView, where
-                // the button didn't receive taps on the watch).
-                .overlay(alignment: .bottomTrailing) {
-                    if didApplyInitialScroll, !isAtBottom || !store.window.reachesChatTail {
-                        jumpToBottomButton(proxy: proxy)
-                            .padding(.trailing, 10)
-                            .padding(.bottom, 18)
-                            .transition(.opacity)
-                            .zIndex(1)
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: isAtBottom)
             }
             // Cover the first-layout→settle window (the `.task` above re-pins to the final
             // position until contentSize stabilizes) so the user never sees the jump.
@@ -447,39 +458,42 @@ struct MessageListView: View {
         }
     }
 
-    private func jumpToBottomButton(proxy: ScrollViewProxy) -> some View {
+    /// The chat isn't showing its newest messages: the user scrolled up, jumped to a
+    /// reply, or opened on the unread divider.
+    private var showsJumpToBottom: Bool {
+        didApplyInitialScroll && (!isAtBottom || !store.window.reachesChatTail)
+    }
+
+    @ViewBuilder
+    private var unseenBadge: some View {
         let unseen = newBelowCount + store.unseenNewerCount
-        return Image(systemName: "chevron.down")
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 32, height: 32)
-                .contentShape(Circle())
-                .glassEffect(in: Circle())
-                .overlay(alignment: .top) {
-                    if unseen > 0 {
-                        Text(unseen > 99 ? "99+" : "\(unseen)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .frame(minWidth: 16, minHeight: 16)
-                            .background(Capsule().fill(Color.accentColor))
-                            .offset(y: -8)
-                    }
-                }
-                // A tap gesture, like the reply header's, rather than a Button.
-                .onTapGesture { scrollToBottom(proxy: proxy) }
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("jumpToBottom")
+        if unseen > 0 {
+            Text(unseen > 99 ? "99+" : "\(unseen)")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .frame(minWidth: 16, minHeight: 16)
+                .background(Capsule().fill(Color.accentColor))
+                .offset(x: 4, y: -4)
+                .allowsHitTesting(false)
+        }
     }
 
     /// Jump-to-bottom tap: reloads the chat tail first when the window was moved away
     /// from it (a reply jump, or paging up far), then pins the bottom while the lazy
     /// rows above it settle their heights.
     private func scrollToBottom(proxy: ScrollViewProxy) {
-        WKInterfaceDevice.current().play(.click)
-        DebugTrace.log("jumpToBottom tap atBottom=\(isAtBottom) tail=\(store.window.reachesChatTail) rows=\(store.rows.count) anchor=\(scrollAnchorId ?? "nil")")
+        DebugTrace.log("jumpToBottom tap atBottom=\(isAtBottom) tail=\(store.window.reachesChatTail) rows=\(store.rows.count)")
         Task {
             await store.jumpToBottom()
             DebugTrace.log("jumpToBottom loaded tail=\(store.window.reachesChatTail) rows=\(store.rows.count)")
+            // The lazy stack can only resolve ids of rows it hasn't built yet through its
+            // ForEach data, so `bottomAnchor` (a static view) is unreachable from far up.
+            // Scroll to the last message first, which builds the bottom of the stack.
+            if let lastId = store.rows.last?.id {
+                proxy.scrollTo(lastId, anchor: .bottom)
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
             // Same settle loop as the initial positioning: re-pin every frame until the
             // lazy rows above the bottom stop changing the content height.
             var lastHeight: CGFloat = -1
@@ -498,7 +512,7 @@ struct MessageListView: View {
             proxy.scrollTo("bottomAnchor", anchor: .bottom)
             isAtBottom = true
             newBelowCount = 0
-            DebugTrace.log("jumpToBottom done anchor=\(scrollAnchorId ?? "nil")")
+            DebugTrace.log("jumpToBottom done")
         }
     }
 
@@ -533,4 +547,11 @@ private extension MessageRow {
         case .daySeparator, .unreadDivider: return nil
         }
     }
+}
+
+/// Ids of the message rows currently on screen. A plain reference held in `@State` so
+/// the per-row visibility callbacks, which fire on every scroll step, don't invalidate
+/// the view; it is only read when older rows are prepended.
+private final class VisibleRowTracker {
+    var ids: Set<String> = []
 }

@@ -10,11 +10,14 @@ struct MessageRowView: View {
     var count: Int = 1
     var onEnterTopEdge: (() -> Void)? = nil
     var onEnterBottomEdge: (() -> Void)? = nil
+    /// Reports the row entering or leaving the viewport, by row id.
+    var onVisibilityChange: ((String, Bool) -> Void)? = nil
     var onIncomingBubbleVisible: ((Int64) -> Void)? = nil
 
     var body: some View {
         rowBody
             .onScrollVisibilityChange(threshold: 0.01) { visible in
+                onVisibilityChange?(row.id, visible)
                 guard visible else { return }
                 // Start paging a few rows before the edge, so the next page is usually
                 // in place by the time the user scrolls there.
