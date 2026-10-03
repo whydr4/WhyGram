@@ -12,11 +12,41 @@ import UIKit
 /// Layout: leading 2pt accent bar → optional 22pt rounded thumbnail → text column
 /// (name + snippet). The view sizes to its content; the host clamps width with
 /// `.frame(maxWidth:)`.
+/// Jumps the chat to a replied-to message. Always compares equal, so installing it in
+/// the environment doesn't re-render every reply header on each parent update (a bare
+/// closure isn't comparable); the handler only captures per-chat state that's stable.
+struct OpenReplyTargetAction: Equatable {
+    let handler: (Int64) -> Void
+
+    func callAsFunction(_ messageId: Int64) { handler(messageId) }
+
+    static func == (lhs: OpenReplyTargetAction, rhs: OpenReplyTargetAction) -> Bool { true }
+}
+
+extension EnvironmentValues {
+    /// Set by `MessageListView`; nil elsewhere (previews, sheets), where reply headers
+    /// stay non-interactive.
+    @Entry var openReplyTarget: OpenReplyTargetAction? = nil
+}
+
 struct ReplyHeaderView: View {
     let header: ReplyHeader
     let style: BubbleStyle
 
+    @Environment(\.openReplyTarget) private var openReplyTarget
+
     var body: some View {
+        if let target = header.targetMessageId, let openReplyTarget {
+            content
+                .contentShape(Rectangle())
+                // Takes precedence over the bubble's own tap (e.g. voice play/pause).
+                .onTapGesture { openReplyTarget(target) }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         HStack(alignment: .top, spacing: 6) {
             Rectangle()
                 .fill(barColor)

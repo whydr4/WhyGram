@@ -378,6 +378,40 @@ final class ChatHistoryStore {
         }
     }
 
+    // MARK: - Jump to a message
+
+    /// Makes sure `messageId` is in the loaded window (e.g. the target of a tapped reply).
+    /// If it isn't, the window is rebuilt around it, the same way a chat opens at its
+    /// unread divider. Returns false, keeping the old window, when it can't be loaded,
+    /// or when a load is already running: a pagination result landing in the rebuilt
+    /// window would break its contiguity.
+    func reveal(messageId: Int64) async -> Bool {
+        if window.cache[messageId] != nil { return true }
+        guard !isLoading, !isLoadingOlder, !isLoadingNewer else { return false }
+        isLoading = true
+        defer { isLoading = false }
+
+        let previous = window
+        window = MessageWindow(
+            anchor: .messageId(messageId),
+            halfLimit: Self.halfLimit,
+            unreadDividerAfterId: previous.unreadDividerAfterId
+        )
+        do {
+            try await loadInitialWindow()
+        } catch {
+            logger.warning("reveal messageId=\(messageId, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+        }
+        guard window.cache[messageId] != nil else {
+            // Deleted, or not reachable right now: stay where the user was.
+            window = previous
+            reproject()
+            return false
+        }
+        unseenNewerCount = 0
+        return true
+    }
+
     // MARK: - Send / draft
 
     func sendText(_ text: String) async {

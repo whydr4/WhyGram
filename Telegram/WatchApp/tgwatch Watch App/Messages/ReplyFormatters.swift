@@ -42,7 +42,8 @@ func replyPreview(
             snippet: snippet,
             minithumbnail: mini,
             isOutgoing: isOutgoing,
-            senderColorIndex: sender?.colorIndex
+            senderColorIndex: sender?.colorIndex,
+            targetMessageId: r.chatId == inChatId && r.messageId != 0 ? r.messageId : nil
         )
 
     case .unsupported:

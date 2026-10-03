@@ -22,4 +22,7 @@ struct ReplyHeader: Equatable, Hashable {
     /// Palette index for the author name (incoming styling only); nil = uncolored.
     /// Set together with `senderName`.
     var senderColorIndex: Int? = nil
+    /// Id of the replied-to message when it lives in the same chat, so tapping the
+    /// header can jump to it; nil for stories and replies to other chats.
+    var targetMessageId: Int64? = nil
 }

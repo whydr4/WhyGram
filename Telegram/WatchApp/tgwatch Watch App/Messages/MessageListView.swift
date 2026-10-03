@@ -44,6 +44,8 @@ struct MessageListView: View {
     // animation. The cool-down lets the prepended rows settle off-screen before the
     // next pagination is allowed.
     @State private var canPaginate: Bool = true
+    /// Row briefly highlighted after jumping to it from a reply header.
+    @State private var highlightedRowId: String?
 
     init(row: ChatRow, store: ChatHistoryStore) {
         self.row = row
@@ -224,6 +226,12 @@ struct MessageListView: View {
                                         store.markVisible(messageId: id)
                                     }
                                 )
+                                .background {
+                                    if highlightedRowId == messageRow.id {
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .fill(Color.accentColor.opacity(0.3))
+                                    }
+                                }
                                 .id(messageRow.id)
                             }
                             if row.canSend {
@@ -262,6 +270,9 @@ struct MessageListView: View {
                             .ignoresSafeArea()
                     }
                     .environment(store)
+                    .environment(\.openReplyTarget, OpenReplyTargetAction { messageId in
+                        jumpToMessage(messageId, proxy: proxy)
+                    })
                     .onScrollGeometryChange(for: ScrollSnapshot.self) { geometry in
                         ScrollSnapshot(
                             contentOffsetY: geometry.contentOffset.y,
@@ -402,6 +413,36 @@ struct MessageListView: View {
                         .background(Color.black.ignoresSafeArea())
                 }
             }
+        }
+    }
+
+    /// Reply-header tap: loads the replied-to message if needed, scrolls it into the
+    /// middle of the screen and flashes its row.
+    private func jumpToMessage(_ messageId: Int64, proxy: ScrollViewProxy) {
+        Task {
+            guard await store.reveal(messageId: messageId),
+                  let rowId = store.rows.first(where: { $0.messageId == messageId })?.id else { return }
+            // Let a rebuilt window lay out before scrolling into it.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(rowId, anchor: .center)
+            }
+            highlightedRowId = rowId
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if highlightedRowId == rowId {
+                withAnimation(.easeOut(duration: 0.4)) { highlightedRowId = nil }
+            }
+        }
+    }
+}
+
+private extension MessageRow {
+    /// Message id behind a bubble or service row; nil for separators and the divider.
+    var messageId: Int64? {
+        switch self {
+        case .bubble(let bubble): return bubble.messageId
+        case .service(let line): return line.messageId
+        case .daySeparator, .unreadDivider: return nil
         }
     }
 }
