@@ -16,9 +16,17 @@ import UIKit
 /// the environment doesn't re-render every reply header on each parent update (a bare
 /// closure isn't comparable); the handler only captures per-chat state that's stable.
 struct OpenReplyTargetAction: Equatable {
-    let handler: (Int64) -> Void
+    /// Called with the replied-to message id and the row id of the tapped message.
+    let handler: (_ messageId: Int64, _ sourceRowId: String?) -> Void
+    /// Row the action is installed for; set per row by `MessageRowView`.
+    var sourceRowId: String? = nil
 
-    func callAsFunction(_ messageId: Int64) { handler(messageId) }
+    func callAsFunction(_ messageId: Int64) { handler(messageId, sourceRowId) }
+
+    /// The same action, reporting `rowId` as the row the jump started from.
+    func from(rowId: String) -> OpenReplyTargetAction {
+        OpenReplyTargetAction(handler: handler, sourceRowId: rowId)
+    }
 
     static func == (lhs: OpenReplyTargetAction, rhs: OpenReplyTargetAction) -> Bool { true }
 }

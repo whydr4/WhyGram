@@ -5,6 +5,7 @@ private struct ScrollSnapshot: Equatable {
     let contentSizeH: CGFloat
     let containerSizeH: CGFloat
     let topInset: CGFloat
+    let bottomInset: CGFloat
 }
 
 struct MessageListView: View {
@@ -53,6 +54,9 @@ struct MessageListView: View {
     @State private var restoreAfterPrepend = false
     /// Bumped by the jump-to-bottom toolbar button; handled inside the ScrollViewReader.
     @State private var jumpToBottomRequest = 0
+    /// Where each reply jump started, newest last. The jump-to-bottom button returns
+    /// to these first, and goes to the bottom once they are used up.
+    @State private var replyReturnStack: [ViewportAnchor] = []
     /// Row briefly highlighted after jumping to it from a reply header.
     @State private var highlightedRowId: String?
     /// Incoming messages that arrived below the viewport while the user was scrolled
@@ -254,8 +258,14 @@ struct MessageListView: View {
                                         }
                                     },
                                     onVisibilityChange: { id, visible in
-                                        if visible { visibleRows.ids.insert(id) } else { visibleRows.ids.remove(id) }
+                                        if visible {
+                                            visibleRows.ids.insert(id)
+                                        } else {
+                                            visibleRows.ids.remove(id)
+                                            visibleRows.frames[id] = nil
+                                        }
                                     },
+                                    onFrameChange: { id, frame in visibleRows.frames[id] = frame },
                                     onIncomingBubbleVisible: { id in
                                         guard id > store.unreadDividerAfterIdSnapshot else { return }
                                         store.markVisible(messageId: id)
@@ -305,17 +315,19 @@ struct MessageListView: View {
                             .ignoresSafeArea()
                     }
                     .environment(store)
-                    .environment(\.openReplyTarget, OpenReplyTargetAction { messageId in
-                        jumpToMessage(messageId, proxy: proxy)
+                    .environment(\.openReplyTarget, OpenReplyTargetAction { messageId, sourceRowId in
+                        jumpToMessage(messageId, from: sourceRowId, proxy: proxy)
                     })
                     .onScrollGeometryChange(for: ScrollSnapshot.self) { geometry in
                         ScrollSnapshot(
                             contentOffsetY: geometry.contentOffset.y,
                             contentSizeH: geometry.contentSize.height,
                             containerSizeH: geometry.containerSize.height,
-                            topInset: geometry.contentInsets.top
+                            topInset: geometry.contentInsets.top,
+                            bottomInset: geometry.contentInsets.bottom
                         )
                     } action: { old, new in
+                        visibleRows.viewport = new
                         // isAtBottom means "user intends to be parked at bottom", NOT "the
                         // bottom edge is visible right now". When a new message arrives while
                         // the user is at the bottom, contentSize grows but contentOffset stays
@@ -411,22 +423,21 @@ struct MessageListView: View {
                         // The visibility set still describes the old layout here: callbacks
                         // for the new layout arrive after this update. Separators are
                         // skipped as anchors because a same-day one moves up with the page.
-                        guard restoreAfterPrepend, oldId != nil, oldId != newId else { return }
+                        guard restoreAfterPrepend, let oldId, oldId != newId else { return }
                         restoreAfterPrepend = false
-                        let visibleIds = visibleRows.ids
-                        let anchorIndex = store.rows.firstIndex { $0.messageId != nil && visibleIds.contains($0.id) }
-                        guard let anchor = anchorIndex.map({ store.rows[$0].id }) ?? oldId else { return }
-                        proxy.scrollTo(anchor, anchor: .top)
-                        DebugTrace.log("prepend restore anchor=\(anchor) index=\(anchorIndex.map(String.init) ?? "fallback") visible=\(visibleIds.count)")
-                        // Rows built around the anchor may still settle their heights; pin
-                        // it once more after they have been laid out.
-                        Task {
-                            try? await Task.sleep(nanoseconds: 16_000_000)
-                            proxy.scrollTo(anchor, anchor: .top)
+                        if let anchor = viewportAnchor() {
+                            restore(anchor, proxy: proxy, reason: "prepend")
+                        } else {
+                            proxy.scrollTo(oldId, anchor: .top)
+                            DebugTrace.log("prepend restore fallback=\(oldId) visible=\(visibleRows.ids.count)")
                         }
                     }
                     .onChange(of: jumpToBottomRequest) {
-                        scrollToBottom(proxy: proxy)
+                        if let back = replyReturnStack.popLast() {
+                            returnFromReply(to: back, proxy: proxy)
+                        } else {
+                            scrollToBottom(proxy: proxy)
+                        }
                     }
                     .onChange(of: store.rows.last?.id) { _, newId in
                         // Telegram convention: outgoing always pulls to bottom; incoming only
@@ -449,7 +460,9 @@ struct MessageListView: View {
                         }
                     }
                     .onChange(of: isAtBottom) { _, atBottom in
-                        if atBottom { newBelowCount = 0 }
+                        guard atBottom else { return }
+                        newBelowCount = 0
+                        replyReturnStack.removeAll()
                     }
                 }
             }
@@ -523,16 +536,21 @@ struct MessageListView: View {
             proxy.scrollTo("bottomAnchor", anchor: .bottom)
             isAtBottom = true
             newBelowCount = 0
+            replyReturnStack.removeAll()
             DebugTrace.log("jumpToBottom done")
         }
     }
 
     /// Reply-header tap: loads the replied-to message if needed, scrolls it into the
-    /// middle of the screen and flashes its row.
-    private func jumpToMessage(_ messageId: Int64, proxy: ScrollViewProxy) {
+    /// middle of the screen and flashes its row. Remembers where the tapped message was,
+    /// so the jump-to-bottom button can bring the user back there first.
+    private func jumpToMessage(_ messageId: Int64, from sourceRowId: String?, proxy: ScrollViewProxy) {
+        let origin = sourceRowId.flatMap { viewportAnchor(rowId: $0) } ?? viewportAnchor()
         Task {
             guard await store.reveal(messageId: messageId),
                   let rowId = store.rows.first(where: { $0.messageId == messageId })?.id else { return }
+            if let origin { replyReturnStack.append(origin) }
+            DebugTrace.log("reply jump to=\(rowId) from=\(origin?.rowId ?? "nil") stack=\(replyReturnStack.count)")
             // Let a rebuilt window lay out before scrolling into it.
             try? await Task.sleep(nanoseconds: 50_000_000)
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -547,6 +565,88 @@ struct MessageListView: View {
             }
         }
     }
+
+    // MARK: - Viewport anchors
+
+    /// Where a message sits on screen now, to put it back there after the rows around it
+    /// change. Uses `rowId` when it's on screen, else the visible message nearest the
+    /// middle of the screen (an anchor near the top edge may be almost scrolled off).
+    /// Separators are never anchors: a same-day one moves up with a prepended page.
+    private func viewportAnchor(rowId: String? = nil) -> ViewportAnchor? {
+        let frames = visibleRows.frames
+        let candidate: String?
+        if let rowId, frames[rowId] != nil {
+            candidate = rowId
+        } else {
+            let middle = visibleRows.viewport.map { $0.containerSizeH / 2 } ?? 0
+            candidate = store.rows
+                .filter { $0.messageId != nil && visibleRows.ids.contains($0.id) && frames[$0.id] != nil }
+                .min { abs(frames[$0.id]!.midY - middle) < abs(frames[$1.id]!.midY - middle) }?
+                .id
+        }
+        guard let id = candidate, let frame = frames[id],
+              let messageId = store.rows.first(where: { $0.id == id })?.messageId else { return nil }
+        return ViewportAnchor(rowId: id, messageId: messageId, top: frame.minY, height: frame.height)
+    }
+
+    /// Scrolls so the anchor's top edge is back at `anchor.top`, then checks where it
+    /// landed and corrects the remaining error.
+    private func restore(_ anchor: ViewportAnchor, proxy: ScrollViewProxy, reason: String) {
+        proxy.scrollTo(anchor.rowId, anchor: unitPoint(placingTopAt: anchor.top, height: anchor.height))
+        Task {
+            var target = anchor.top
+            var errors: [String] = []
+            for _ in 0..<2 {
+                try? await Task.sleep(nanoseconds: 33_000_000)
+                guard let landed = visibleRows.frames[anchor.rowId]?.minY else {
+                    errors.append("gone")
+                    break
+                }
+                let error = landed - anchor.top
+                errors.append(String(format: "%.1f", error))
+                guard abs(error) >= 2 else { break }
+                target -= error
+                proxy.scrollTo(anchor.rowId, anchor: unitPoint(placingTopAt: target, height: anchor.height))
+            }
+            let v = visibleRows.viewport
+            DebugTrace.log("\(reason) restore anchor=\(anchor.rowId) top=\(Int(anchor.top)) h=\(Int(anchor.height)) err=\(errors.joined(separator: ",")) view=\(Int(v?.containerSizeH ?? 0))/\(Int(v?.topInset ?? 0))/\(Int(v?.bottomInset ?? 0)) visible=\(visibleRows.ids.count)")
+        }
+    }
+
+    /// The `scrollTo` anchor that puts a row of `height` with its top edge `top` points
+    /// below the top of the scroll view. `scrollTo` lines up the same unit point of the
+    /// row and of the viewport inside its content insets, so the row's top lands at
+    /// `insetTop + y * (insetHeight - height)`.
+    private func unitPoint(placingTopAt top: CGFloat, height: CGFloat) -> UnitPoint {
+        guard let v = visibleRows.viewport else { return .top }
+        let span = v.containerSizeH - v.topInset - v.bottomInset - height
+        guard abs(span) >= 1 else { return .top }
+        return UnitPoint(x: 0.5, y: (top - v.topInset) / span)
+    }
+
+    /// Jump-to-bottom tap after a reply jump: reloads the window around the message the
+    /// jump started from, if it was replaced, and puts it back where it was on screen.
+    private func returnFromReply(to anchor: ViewportAnchor, proxy: ScrollViewProxy) {
+        DebugTrace.log("reply return to=\(anchor.rowId) left=\(replyReturnStack.count)")
+        Task {
+            guard await store.reveal(messageId: anchor.messageId) else {
+                replyReturnStack.removeAll()
+                scrollToBottom(proxy: proxy)
+                return
+            }
+            // Let a rebuilt window lay out before scrolling into it.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            restore(anchor, proxy: proxy, reason: "reply")
+        }
+    }
+}
+
+/// A message's place on screen: its row's top edge in the scroll view's visible area.
+private struct ViewportAnchor {
+    let rowId: String
+    let messageId: Int64
+    let top: CGFloat
+    let height: CGFloat
 }
 
 private extension MessageRow {
@@ -560,9 +660,12 @@ private extension MessageRow {
     }
 }
 
-/// Ids of the message rows currently on screen. A plain reference held in `@State` so
-/// the per-row visibility callbacks, which fire on every scroll step, don't invalidate
-/// the view; it is only read when older rows are prepended.
+/// Rows currently on screen and their frames. A plain reference held in `@State` so
+/// the per-row callbacks, which fire on every scroll step, don't invalidate the view;
+/// it is only read to anchor the viewport (older-page prepend, reply jumps).
 private final class VisibleRowTracker {
     var ids: Set<String> = []
+    /// Frames of built rows in the scroll view's visible area.
+    var frames: [String: CGRect] = [:]
+    var viewport: ScrollSnapshot?
 }

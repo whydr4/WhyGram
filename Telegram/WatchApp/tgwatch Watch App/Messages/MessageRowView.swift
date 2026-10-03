@@ -12,10 +12,19 @@ struct MessageRowView: View {
     var onEnterBottomEdge: (() -> Void)? = nil
     /// Reports the row entering or leaving the viewport, by row id.
     var onVisibilityChange: ((String, Bool) -> Void)? = nil
+    /// Reports the row's frame in the scroll view's visible area, by row id.
+    var onFrameChange: ((String, CGRect) -> Void)? = nil
     var onIncomingBubbleVisible: ((Int64) -> Void)? = nil
+
+    @Environment(\.openReplyTarget) private var openReplyTarget
 
     var body: some View {
         rowBody
+            // Reply headers inside report this row as where the jump started.
+            .environment(\.openReplyTarget, openReplyTarget?.from(rowId: row.id))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
+                onFrameChange?(row.id, frame)
+            }
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 onVisibilityChange?(row.id, visible)
                 guard visible else { return }
