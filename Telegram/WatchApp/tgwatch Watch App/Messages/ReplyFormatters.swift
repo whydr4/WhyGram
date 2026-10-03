@@ -76,6 +76,8 @@ private func replySnippet(_ content: MessageContent) -> String {
         return "Contact"
     case .messagePoll:
         return "Poll"
+    case .messageCall, .messageGroupCall:
+        return "Call"
     default:
         return "Message"
     }

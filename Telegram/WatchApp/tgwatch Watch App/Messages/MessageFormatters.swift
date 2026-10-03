@@ -7,7 +7,8 @@ import TDShim
 ///
 /// Returns `""` for content this milestone doesn't know how to render. Service messages
 /// are handled separately; `messageBody` returns `""` for service content.
-func messageBody(_ content: MessageContent) -> String {
+func messageBody(_ content: MessageContent, isOutgoing: Bool = false) -> String {
+    if let call = callSummary(content, isOutgoing: isOutgoing) { return call }
     switch content {
     case .messageText(let t):    return t.text.text
     case .messagePhoto(let m):   return m.caption.text
@@ -38,10 +39,38 @@ func isUnsupportedContent(_ content: MessageContent) -> Bool {
     switch content {
     case .messageText, .messagePhoto, .messageVideo, .messageVideoNote,
          .messageVoiceNote, .messageAudio, .messageSticker, .messageDocument,
-         .messageLocation, .messageVenue, .messageContact, .messagePoll:
+         .messageLocation, .messageVenue, .messageContact, .messagePoll,
+         .messageCall, .messageGroupCall:
         return false
     default:
         return true
+    }
+}
+
+/// One-line label for a 1:1 or group call message ("📞 Outgoing call · 2:31",
+/// "📹 Missed video call", …), or nil for any other content. `MessageCall` doesn't
+/// say who called, so the direction comes from the message's `isOutgoing`.
+func callSummary(_ content: MessageContent, isOutgoing: Bool) -> String? {
+    switch content {
+    case .messageCall(let call):
+        let icon = call.isVideo ? "📹" : "📞"
+        let kind = call.isVideo ? "video call" : "call"
+        if call.duration > 0 {
+            return "\(icon) \(isOutgoing ? "Outgoing" : "Incoming") \(kind) · \(formatDuration(call.duration))"
+        }
+        if case .callDiscardReasonDeclined = call.discardReason {
+            return "\(icon) Declined \(kind)"
+        }
+        // Missed, hung up or dropped before it connected: the caller cancelled it,
+        // the callee missed it.
+        return "\(icon) \(isOutgoing ? "Cancelled" : "Missed") \(kind)"
+    case .messageGroupCall(let call):
+        let icon = call.isVideo ? "📹" : "📞"
+        if call.isActive { return "\(icon) Ongoing group call" }
+        if call.wasMissed { return "\(icon) Missed group call" }
+        return call.duration > 0 ? "\(icon) Group call · \(formatDuration(call.duration))" : "\(icon) Group call"
+    default:
+        return nil
     }
 }
 

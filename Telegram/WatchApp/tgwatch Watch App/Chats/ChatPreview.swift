@@ -40,6 +40,8 @@ func chatPreview(_ chat: CachedChat, userNames: [Int64: String], selfUserId: Int
     case .messageVenue(let m): return m.venue.title.isEmpty ? "Location" : m.venue.title
     case .messageContact:  return "Contact"
     case .messagePoll:     return "Poll"
+    case .messageCall, .messageGroupCall:
+        return callSummary(last.content, isOutgoing: last.isOutgoing) ?? ""
     default:               return ""
     }
 }

@@ -163,7 +163,7 @@ func messageRows(
             messageId: msg.id,
             isOutgoing: msg.isOutgoing,
             senderName: sender?.name,
-            body: messageBody(msg.content),
+            body: messageBody(msg.content, isOutgoing: msg.isOutgoing),
             photo: photoVisual(for: msg.content, fileLocals: fileLocals),
             video: videoVisual(for: msg.content, fileLocals: fileLocals),
             videoNote: videoNoteVisual(for: msg.content, fileLocals: fileLocals),
