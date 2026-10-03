@@ -25,6 +25,9 @@ struct MessageRowView: View, Equatable {
     @Environment(\.openReplyTarget) private var openReplyTarget
 
     var body: some View {
+        #if DEBUG
+        let _ = RenderCounter.bump("row")
+        #endif
         rowBody
             // Reply headers inside report this row as where the jump started.
             .environment(\.openReplyTarget, openReplyTarget?.from(rowId: row.id))

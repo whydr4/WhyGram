@@ -9,7 +9,11 @@ import Foundation
 /// The file is truncated when it passes `maxBytes`.
 @MainActor
 enum DebugTrace {
+    #if DEBUG
+    private static let maxBytes = 4 * 1024 * 1024   // the simulator's jump probe logs every frame
+    #else
     private static let maxBytes = 256 * 1024
+    #endif
     private static let url: URL? = FileManager.default
         .urls(for: .cachesDirectory, in: .userDomainMask).first?
         .appendingPathComponent("whygram-trace.log")
@@ -31,3 +35,25 @@ enum DebugTrace {
         }
     }
 }
+
+#if DEBUG
+/// Simulator-only render counters: how often the list and its rows re-evaluate their
+/// bodies. Logged once a second while anything is counted.
+@MainActor
+enum RenderCounter {
+    private static var counts: [String: Int] = [:]
+    private static var flushScheduled = false
+
+    static func bump(_ name: String) {
+        counts[name, default: 0] += 1
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            let line = counts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            DebugTrace.log("renders/s " + line)
+            counts = [:]
+            flushScheduled = false
+        }
+    }
+}
+#endif

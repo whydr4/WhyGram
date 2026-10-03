@@ -10,6 +10,9 @@ struct MessageBubbleView: View {
     private var style: BubbleStyle { .resolve(isOutgoing: bubble.isOutgoing) }
 
     var body: some View {
+        #if DEBUG
+        let _ = RenderCounter.bump("bubble")
+        #endif
         HStack(alignment: .top, spacing: 0) {
             if bubble.isOutgoing { Spacer(minLength: 16) }
             VStack(alignment: bubble.isOutgoing ? .trailing : .leading, spacing: 1) {

@@ -269,7 +269,10 @@ final class ChatHistoryStore {
     private static let paginationLimit = 30
     private static let failureStreakCap = 3
 
-    func loadOlder() async {
+    /// Loads the page above the window. `beforeApply` runs once the page has arrived and
+    /// before it's shown: the list waits there for the scroll to come to rest, because a
+    /// prepend during momentum isn't offset-compensated and throws the content around.
+    func loadOlder(beforeApply: @MainActor () async -> Void = {}) async {
         guard !isLoadingOlder, window.hasOlder, let from = window.loadedLowestId else { return }
         isLoadingOlder = true
         defer { isLoadingOlder = false }
@@ -277,6 +280,7 @@ final class ChatHistoryStore {
             let messages = try await loader.loadHistory(
                 chatId: chatId, fromMessageId: from, offset: 0, limit: Self.paginationLimit
             )
+            await beforeApply()
             for m in messages { primeFiles(from: m.content) }
             window.extendOlder(messages.map(CachedMessage.init))
             olderFailureStreak = 0

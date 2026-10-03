@@ -27,9 +27,6 @@ struct MessageListView: View {
     // view lands on the unread divider instead of the bottom.
     @State private var isAtBottom: Bool
     @State private var didApplyInitialScroll: Bool = false
-    /// The last user scroll moved up (toward older messages) and the scroll hasn't come
-    /// to rest. Picks which edge the content stays pinned to when its size changes.
-    @State private var scrollingUp = false
     // Pagination triggers fire from `.onScrollVisibilityChange` on the top/bottom rows.
     // On initial layout — especially for all-unread chats where the divider lands at
     // row index 0 — the topmost rows are visible without any user gesture, which would
@@ -50,6 +47,9 @@ struct MessageListView: View {
     /// Set while an older page loads, so the prepend that follows restores the viewport
     /// (and a window rebuild by a reply jump doesn't).
     @State private var restoreAfterPrepend = false
+    /// Drives exact offset corrections (see the prepend compensation in the geometry
+    /// observer). Only written by us; the list never reads it back.
+    @State private var scrollPosition = ScrollPosition()
     /// Bumped by the jump-to-bottom toolbar button; handled inside the ScrollViewReader.
     @State private var jumpToBottomRequest = 0
     /// Where each reply jump started, newest last. The jump-to-bottom button returns
@@ -157,6 +157,9 @@ struct MessageListView: View {
 
     @ViewBuilder
     private func content(store: ChatHistoryStore) -> some View {
+        #if DEBUG
+        let _ = RenderCounter.bump("list")
+        #endif
         switch store.loadState {
         case .loadingFirstPage:
             // Keep the spinner up for the entire initial load. TDLib's cold cache
@@ -237,9 +240,23 @@ struct MessageListView: View {
                                         restoreAfterPrepend = true
                                         DebugTrace.log("loadOlder trigger row=\(messageRow.id) rows=\(store.rows.count) visible=\(visibleRows.ids.count)")
                                         Task {
-                                            await store.loadOlder()
+                                            await store.loadOlder(beforeApply: {
+                                                let waited = await waitForScrollToRest()
+                                                // Where the content and the message in the middle
+                                                // of the screen were before the page goes in above
+                                                // them; see the prepend compensation.
+                                                if let v = visibleRows.viewport {
+                                                    visibleRows.prependBase = PrependBase(
+                                                        offset: v.contentOffsetY,
+                                                        size: v.contentSizeH,
+                                                        anchor: viewportAnchor()
+                                                    )
+                                                }
+                                                DebugTrace.log("loadOlder apply after \(Int(waited * 1000))ms")
+                                            })
                                             DebugTrace.log("loadOlder done rows=\(store.rows.count)")
                                             try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
+                                            visibleRows.prependBase = nil
                                             restoreAfterPrepend = false
                                             canPaginate = true
                                         }
@@ -263,7 +280,15 @@ struct MessageListView: View {
                                             visibleRows.frames[id] = nil
                                         }
                                     },
-                                    onFrameChange: { id, frame in visibleRows.frames[id] = frame },
+                                    onFrameChange: { id, frame in
+                                        visibleRows.frames[id] = frame
+                                        if let base = visibleRows.prependBase, base.anchor?.rowId == id {
+                                            keepPrependAnchor(base, frame: frame)
+                                        }
+                                        #if DEBUG
+                                        visibleRows.probeRowMoved(id)
+                                        #endif
+                                    },
                                     onIncomingBubbleVisible: { id in
                                         guard id > store.unreadDividerAfterIdSnapshot else { return }
                                         store.markVisible(messageId: id)
@@ -327,6 +352,9 @@ struct MessageListView: View {
                         )
                     } action: { old, new in
                         visibleRows.viewport = new
+                        #if DEBUG
+                        visibleRows.probeScrolled(new)
+                        #endif
                         // isAtBottom means "user intends to be parked at bottom", NOT "the
                         // bottom edge is visible right now". When a new message arrives while
                         // the user is at the bottom, contentSize grows but contentOffset stays
@@ -348,21 +376,21 @@ struct MessageListView: View {
                         // contentSize-stable changes imply user-driven scroll; arm
                         // pagination so it only fires after the user actually moved.
                         if !userHasScrolled { userHasScrolled = true }
-                        if new.contentOffsetY != old.contentOffsetY {
-                            let up = new.contentOffsetY < old.contentOffsetY
-                            if scrollingUp != up { scrollingUp = up }
+                    }
+                    .scrollPosition($scrollPosition)
+                    .onScrollPhaseChange { _, phase in
+                        visibleRows.isScrolling = phase.isScrolling
+                        visibleRows.isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+                        // The user took over: their scroll, not the prepend, moves things now.
+                        // (Our own scrollTo shows up as .animating; that one is ours.)
+                        if phase == .tracking || phase == .interacting || phase == .decelerating {
+                            visibleRows.prependBase = nil
                         }
                     }
-                    .onScrollPhaseChange { _, phase in
-                        if !phase.isScrolling, scrollingUp { scrollingUp = false }
-                    }
-                    // Which edge keeps still when the content changes size. Rows built
-                    // above the viewport while scrolling up settle their real heights,
-                    // and older pages are prepended there: pinning the bottom keeps the
-                    // rows on screen in place without any scrolling of our own. Scrolling
-                    // down (newer pages appended, rows below settling) and at rest
-                    // (incoming messages while reading history) pin the top instead.
-                    .defaultScrollAnchor(sizeChangeAnchor, for: .sizeChanges)
+                    // Parked at the chat's tail: stay there as messages arrive and rows
+                    // settle. (It doesn't keep rows in place for an older-page prepend;
+                    // the prepend compensation does that.)
+                    .defaultScrollAnchor(isAtBottom && store.window.reachesChatTail ? .bottom : .top, for: .sizeChanges)
                     // Dedicated content-height tracker for the settle loops (kept in the
                     // tracker, not @State, so growth doesn't re-render the list). The ScrollSnapshot observer above bails early on
                     // contentSize changes (to preserve user-driven isAtBottom), so it
@@ -433,29 +461,29 @@ struct MessageListView: View {
                     // Keyed on the first message, not the first row: that is a day separator,
                     // which keeps its id when the prepended page is from the same day.
                     .onChange(of: store.rows.first(where: { $0.messageId != nil })?.id) { oldId, newId in
-                        // Older rows were prepended. The scroll view keeps its absolute
-                        // offset, which would leave the user looking at the top of the new
-                        // page. Put the topmost message that was on screen back at the top.
-                        // The visibility set still describes the old layout here: callbacks
-                        // for the new layout arrive after this update. Separators are
-                        // skipped as anchors because a same-day one moves up with the page.
+                        // Older rows were prepended; the size-change anchor and the prepend
+                        // compensation keep the rows on screen in place.
                         guard restoreAfterPrepend, let oldId, oldId != newId else { return }
-                        // The bottom-pinned size-change anchor (see .defaultScrollAnchor)
-                        // keeps the rows in place. Check that it did, and fall back to
-                        // scrolling the anchor row back if it didn't.
-                        guard let anchor = viewportAnchor() else {
-                            proxy.scrollTo(oldId, anchor: .top)
-                            DebugTrace.log("prepend restore fallback=\(oldId) visible=\(visibleRows.ids.count)")
-                            return
+                        // Prepend compensation, coarse step, in the same update as the new
+                        // rows. Neither the offset nor the content-size change can say where
+                        // the old rows went (the lazy stack re-estimates unbuilt rows below
+                        // too, and the size-change anchor doesn't act here), so scroll to
+                        // the message that was mid-screen by id: that builds it about where
+                        // it was, and `keepPrependAnchor` fine-tunes from its real frame.
+                        if let anchor = visibleRows.prependBase?.anchor, let v = visibleRows.viewport {
+                            let span = v.containerSizeH - anchor.height
+                            // `scrollTo` lines up the same unit point of the row and of the
+                            // viewport, so the row's top lands at y * (viewport - row height).
+                            let y = abs(span) >= 1 ? min(max(anchor.top / span, -10), 10) : 0
+                            proxy.scrollTo(anchor.rowId, anchor: UnitPoint(x: 0.5, y: y))
+                            DebugTrace.log(String(format: "prepend coarse anchor=%@ top=%.1f h=%.1f unit=%.2f", anchor.rowId, anchor.top, anchor.height, y))
                         }
-                        let pinned = sizeChangeAnchor == .bottom ? "bottom" : "top"
+                        guard let anchor = viewportAnchor() else { return }
+                        // Diagnostics: how far the message on screen moved (it shouldn't).
                         Task {
-                            try? await Task.sleep(nanoseconds: 33_000_000)
+                            try? await Task.sleep(nanoseconds: 50_000_000)
                             let drift = visibleRows.frames[anchor.rowId].map { $0.minY - anchor.top }
-                            if drift.map({ abs($0) > 40 }) ?? true {
-                                proxy.scrollTo(anchor.rowId, anchor: .top)
-                            }
-                            DebugTrace.log("prepend keep anchor=\(anchor.rowId) drift=\(drift.map { String(format: "%.1f", $0) } ?? "gone") pinned=\(pinned) visible=\(visibleRows.ids.count)")
+                            DebugTrace.log("prepend keep anchor=\(anchor.rowId) drift=\(drift.map { String(format: "%.1f", $0) } ?? "gone") visible=\(visibleRows.ids.count)")
                         }
                     }
                     .onChange(of: jumpToBottomRequest) {
@@ -488,7 +516,9 @@ struct MessageListView: View {
                     .onChange(of: isAtBottom) { _, atBottom in
                         guard atBottom else { return }
                         newBelowCount = 0
-                        replyReturnStack.removeAll()
+                        // Only when the user scrolled down by themselves: a reply jump's
+                        // animation starts at the bottom and passes through here too.
+                        if visibleRows.isUserScrolling { replyReturnStack.removeAll() }
                     }
                 }
             }
@@ -621,6 +651,31 @@ struct MessageListView: View {
         return "miss=\(fmt(missBefore))->\(fmt(missAfter)) pins=\(pins)"
     }
 
+    /// Prepend compensation, fine step: puts the anchor message back where it was on
+    /// screen whenever the rows settling their real heights above it move it.
+    /// `scrollTo(y:)` counts from the top edge, without the content inset.
+    private func keepPrependAnchor(_ base: PrependBase, frame: CGRect) {
+        guard let anchor = base.anchor, let v = visibleRows.viewport else { return }
+        let delta = frame.minY - anchor.top
+        guard abs(delta) >= 0.5 else { return }
+        let target = v.contentOffsetY + delta
+        // Callbacks can repeat before the scroll lands; the target is absolute, so only
+        // send a new one.
+        guard abs(target - (visibleRows.prependBase?.lastTarget ?? .nan)) >= 0.5 else { return }
+        visibleRows.prependBase?.lastTarget = target
+        scrollPosition.scrollTo(y: target + v.topInset)
+        DebugTrace.log(String(format: "prepend fine delta=%.1f off=%.1f -> %.1f", delta, v.contentOffsetY, target))
+    }
+
+    /// Waits (up to 3s) until the scroll view isn't moving. Returns the seconds waited.
+    private func waitForScrollToRest() async -> Double {
+        let start = Date()
+        while visibleRows.isScrolling, Date().timeIntervalSince(start) < 3 {
+            try? await Task.sleep(nanoseconds: 16_000_000)
+        }
+        return Date().timeIntervalSince(start)
+    }
+
     /// Briefly highlights a row the user was brought to.
     private func flash(_ rowId: String) async {
         highlightedRowId = rowId
@@ -630,14 +685,6 @@ struct MessageListView: View {
         }
     }
 
-    /// The edge pinned when the content size changes (see `.defaultScrollAnchor`).
-    private var sizeChangeAnchor: UnitPoint {
-        // Parked at the chat's tail: stay there as messages arrive and rows settle.
-        if isAtBottom && store.window.reachesChatTail { return .bottom }
-        // An older page is loading or just landed above the viewport.
-        if restoreAfterPrepend { return .bottom }
-        return scrollingUp ? .bottom : .top
-    }
 
     // MARK: - Viewport anchors
 
@@ -679,8 +726,15 @@ struct MessageListView: View {
     }
 }
 
+struct PrependBase {
+    let offset: CGFloat
+    let size: CGFloat
+    let anchor: ViewportAnchor?
+    var lastTarget: CGFloat?
+}
+
 /// A message's place on screen: its row's top edge in the scroll view's visible area.
-private struct ViewportAnchor {
+struct ViewportAnchor {
     let rowId: String
     let messageId: Int64
     let top: CGFloat
@@ -708,4 +762,33 @@ private final class VisibleRowTracker {
     var viewport: ScrollSnapshot?
     /// Content height, polled by the settle loops to tell when rows stop resizing.
     var contentHeight: CGFloat = 0
+    /// The scroll view is being dragged, decelerating or animating.
+    var isScrolling = false
+    /// The scroll view is moving because of the user (dragged, or decelerating after it).
+    var isUserScrolling = false
+    /// Offset and content height just before an older page goes in; set while the prepend
+    /// compensation is armed.
+    var prependBase: PrependBase?
+
+    #if DEBUG
+    /// Simulator-only jump probe: logs every scroll step and every move of one on-screen
+    /// message, so a trace of a steady drag shows rows moving by more than the drag.
+    private var probeId: String?
+
+    @MainActor func probeScrolled(_ g: ScrollSnapshot) {
+        if probeId.map({ frames[$0] == nil || !ids.contains($0) }) ?? true {
+            probeId = frames
+                .filter { $0.key.hasPrefix("msg-") && ids.contains($0.key) }
+                .min { abs($0.value.midY - g.containerSizeH / 2) < abs($1.value.midY - g.containerSizeH / 2) }?
+                .key
+        }
+        let y = probeId.flatMap { frames[$0]?.minY }
+        DebugTrace.log(String(format: "geo off=%.1f size=%.1f y=%.1f ", g.contentOffsetY, g.contentSizeH, y ?? .nan) + (probeId ?? "-"))
+    }
+
+    @MainActor func probeRowMoved(_ id: String) {
+        guard id == probeId, let y = frames[id]?.minY else { return }
+        DebugTrace.log(String(format: "row y=%.1f ", y) + id)
+    }
+    #endif
 }
