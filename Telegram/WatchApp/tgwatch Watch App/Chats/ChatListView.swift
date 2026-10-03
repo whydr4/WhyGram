@@ -12,6 +12,12 @@ struct ChatListView: View {
     /// ScrollView (where rotation has no useful effect). watchOS otherwise routes
     /// the crown to the most-recently-interacted scrollable.
     @FocusState private var listFocused: Bool
+    /// The app title shows only while the list sits at its top and fades out once the
+    /// user scrolls down, instead of staying pinned next to the clock.
+    @State private var titleHidden = false
+    /// Smallest scroll offset seen, i.e. the list's resting top. Measured instead of
+    /// assumed, because the pill row is tucked under the bar with a negative inset.
+    @State private var topScrollOffset: CGFloat?
 
     var body: some View {
         NavigationStack {
@@ -28,7 +34,7 @@ struct ChatListView: View {
                 .navigationDestination(item: $opener.target) { target in
                     MessageListView(row: target.row, store: target.store)
                 }
-                .navigationTitle("Chats")
+                .navigationTitle(titleHidden ? "" : "WhyGram")
                 .navigationBarTitleDisplayMode(.inline)
                 // `.toolbar(.visible)` forces the nav-bar container to
                 // materialize on the chat list. Without it, watchOS-26 skips
@@ -94,6 +100,13 @@ struct ChatListView: View {
             }
         }
         .listStyle(.plain)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
+            let top = min(topScrollOffset ?? offset, offset)
+            topScrollOffset = top
+            let hidden = offset - top > 10
+            guard hidden != titleHidden else { return }
+            withAnimation(.easeInOut(duration: 0.25)) { titleHidden = hidden }
+        }
         .focused($listFocused)
         .onAppear { listFocused = true }
         // Bar is intentionally visible (forced by `.toolbar(.visible, for:
