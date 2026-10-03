@@ -12,11 +12,6 @@ struct ChatListView: View {
     /// ScrollView (where rotation has no useful effect). watchOS otherwise routes
     /// the crown to the most-recently-interacted scrollable.
     @FocusState private var listFocused: Bool
-    /// The app title shows only while the list sits at its top and fades out once the
-    /// user scrolls down. Driven by the inset-adjusted scroll offset, which is 0 at rest
-    /// and negative during rubber-band overscroll, so no baseline has to be measured.
-    /// (Row visibility didn't work: rows under the glass bar still count as visible.)
-    @State private var titleHidden = false
 
     var body: some View {
         NavigationStack {
@@ -33,8 +28,7 @@ struct ChatListView: View {
                 .navigationDestination(item: $opener.target) { target in
                     MessageListView(row: target.row, store: target.store)
                 }
-                .navigationTitle(titleHidden ? "" : "WhyGram")
-                .navigationBarTitleDisplayMode(.inline)
+                // No bar title: "WhyGram" is the list's first row (see `content`).
                 // `.toolbar(.visible)` forces the nav-bar container to
                 // materialize on the chat list. Without it, watchOS-26 skips
                 // chrome on a NavigationStack root view, leaving only the
@@ -60,26 +54,42 @@ struct ChatListView: View {
         // across folder switches.
         let folderLoadState = store.loadState(for: store.currentFolder)
         List {
-            if store.pills.count > 1 {
-                FolderPillBar(pills: store.pills, onSelect: { pill in
-                    switchTo(pill: pill, proxy: proxy)
-                }, onUserInteraction: {
-                    listFocused = true
-                })
-                .id("folderPillBarRow")
-                // Negative bottom inset compresses the natural ~23pt gap between
-                // the pill row and the first chat row down to ~8pt.
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: -15, trailing: 0))
-                .listRowBackground(Color.clear)
-                // Belt-and-suspenders: also catch tap-only cases (no scroll offset change)
-                // via a simultaneous drag gesture. The onUserInteraction callback on
-                // FolderPillBar handles the horizontal-pan case via onScrollGeometryChange.
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 0).onEnded { _ in
+            // The app title (and the folder pills under it) as the list's first row
+            // rather than the bar title: it then scrolls away under the glass bar with
+            // the content, in step with the finger, instead of being swapped out of the
+            // bar (which watchOS doesn't animate, so it popped). One row, so the gap
+            // between title and pills isn't a list row's minimum height.
+            VStack(alignment: .trailing, spacing: 6) {
+                Text("WhyGram")
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+                    // Lines up with the clock's trailing edge, where the bar title was.
+                    .padding(.trailing, 13)
+                    .accessibilityAddTraits(.isHeader)
+                if store.pills.count > 1 {
+                    FolderPillBar(pills: store.pills, onSelect: { pill in
+                        switchTo(pill: pill, proxy: proxy)
+                    }, onUserInteraction: {
                         listFocused = true
-                    }
-                )
+                    })
+                    // Belt-and-suspenders: also catch tap-only cases (no scroll offset
+                    // change) via a simultaneous drag gesture. The onUserInteraction
+                    // callback on FolderPillBar handles the horizontal-pan case via
+                    // onScrollGeometryChange.
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0).onEnded { _ in
+                            listFocused = true
+                        }
+                    )
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .id("folderPillBarRow")
+            // Negative bottom inset tightens the natural gap between the header row and
+            // the first chat row.
+            // The negative top inset lifts the title to where the bar title sat.
+            .listRowInsets(EdgeInsets(top: -12, leading: 0, bottom: -6, trailing: 0))
+            .listRowBackground(Color.clear)
             if store.chats.isEmpty {
                 emptyStateRow(loadState: folderLoadState)
             } else {
@@ -99,21 +109,8 @@ struct ChatListView: View {
             }
         }
         .listStyle(.plain)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top > 12
-        } action: { _, scrolledDown in
-            guard scrolledDown != titleHidden else { return }
-            withAnimation(.easeInOut(duration: 0.25)) { titleHidden = scrolledDown }
-        }
         .focused($listFocused)
         .onAppear { listFocused = true }
-        // Bar is intentionally visible (forced by `.toolbar(.visible, for:
-        // .navigationBar)` on the body chain). When folder pills are present,
-        // pull the pill row up by 24pt to tuck it under the bar's bottom edge
-        // — without that, the natural top-of-list inset leaves an awkward gap
-        // between the bar and the pill row. Plain chat rows (no pills) sit at
-        // the natural top.
-        .padding(.top, store.pills.count > 1 ? -20 : 0)
     }
 
     private func makeHistoryStore(for row: ChatRow) -> ChatHistoryStore? {
