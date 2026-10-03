@@ -1,4 +1,5 @@
 import SwiftUI
+import WatchKit
 
 private struct ScrollSnapshot: Equatable {
     let contentOffsetY: CGFloat
@@ -40,10 +41,13 @@ struct MessageListView: View {
     @State private var userHasScrolled: Bool = false
     // Hard cool-down after each loadOlder/loadNewer. Without this, the row-visibility
     // callbacks for newly-prepended rows fire IMMEDIATELY after `reproject()` and re-
-    // trigger pagination before SwiftUI can land the `.onChange`-driven scroll-preservation
-    // animation. The cool-down lets the prepended rows settle off-screen before the
-    // next pagination is allowed.
+    // trigger pagination before the anchored row is back in place. The cool-down lets
+    // the prepended rows settle off-screen before the next pagination is allowed; it is
+    // short because paging now starts several rows before the edge.
     @State private var canPaginate: Bool = true
+    private static let paginationCooldownNs: UInt64 = 300_000_000
+    /// Id of the row at the top of the viewport (`.scrollPosition`).
+    @State private var scrollAnchorId: String?
     /// Row briefly highlighted after jumping to it from a reply header.
     @State private var highlightedRowId: String?
     /// Incoming messages that arrived below the viewport while the user was scrolled
@@ -209,18 +213,34 @@ struct MessageListView: View {
                                     onEnterTopEdge: {
                                         guard userHasScrolled, canPaginate else { return }
                                         canPaginate = false
+                                        // Row at the top of the viewport before older rows are
+                                        // prepended; the view must stay on it afterwards.
+                                        let anchorBefore = scrollAnchorId
+                                        DebugTrace.log("loadOlder trigger row=\(idx) rows=\(store.rows.count) anchor=\(anchorBefore ?? "nil")")
                                         Task {
                                             await store.loadOlder()
-                                            try? await Task.sleep(nanoseconds: 800_000_000)
+                                            try? await Task.sleep(nanoseconds: 32_000_000)
+                                            let anchorAfter = scrollAnchorId
+                                            DebugTrace.log("loadOlder done rows=\(store.rows.count) anchor=\(anchorAfter ?? "nil")")
+                                            // `scrollPosition` normally keeps the anchored row in place
+                                            // across the prepend. If the view drifted onto the new rows
+                                            // instead, put the anchored row back at the top.
+                                            if let anchorBefore, anchorAfter != anchorBefore {
+                                                proxy.scrollTo(anchorBefore, anchor: .top)
+                                                DebugTrace.log("loadOlder restored anchor")
+                                            }
+                                            try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
                                             canPaginate = true
                                         }
                                     },
                                     onEnterBottomEdge: {
                                         guard userHasScrolled, canPaginate, !store.window.reachesChatTail else { return }
                                         canPaginate = false
+                                        DebugTrace.log("loadNewer trigger row=\(idx) rows=\(store.rows.count)")
                                         Task {
                                             await store.loadNewer()
-                                            try? await Task.sleep(nanoseconds: 800_000_000)
+                                            DebugTrace.log("loadNewer done rows=\(store.rows.count)")
+                                            try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
                                             canPaginate = true
                                         }
                                     },
@@ -260,9 +280,13 @@ struct MessageListView: View {
                                 .frame(height: 19)
                                 .id("bottomAnchor")
                         }
+                        .scrollTargetLayout()
                         .padding(.horizontal, 4)
                         .padding(.top, 4)
                     }
+                    // Tracks the row at the top of the viewport, and makes the scroll view
+                    // keep that row in place when older rows are prepended above it.
+                    .scrollPosition(id: $scrollAnchorId, anchor: .top)
                     .ignoresSafeArea(edges: .bottom)
                     .scrollContentBackground(.hidden)
                     .background {
@@ -370,20 +394,6 @@ struct MessageListView: View {
                         isAtBottom = store.window.initialScrollTargetId == nil
                         didApplyInitialScroll = true
                     }
-                    .onChange(of: store.rows.first?.id) { oldId, newId in
-                        // Scroll preservation across `loadOlder`. When older content is
-                        // prepended, SwiftUI keeps the absolute scroll offset where it was
-                        // — meaning the user was at pixel 0 (top of old content) and is
-                        // now at pixel 0 of the new (longer) content, which exposes the
-                        // newly-prepended top rows. Those rows' `index <= 2` triggers a
-                        // fresh `loadOlder` and the chat enters a paginate-forever loop.
-                        // Snap the user back to the previously-first row so the prepended
-                        // content lands above the viewport (off-screen until the user
-                        // chooses to scroll there).
-                        guard didApplyInitialScroll,
-                              let oldId, let newId, oldId != newId else { return }
-                        proxy.scrollTo(oldId, anchor: .top)
-                    }
                     .onChange(of: store.rows.last?.id) { _, newId in
                         // Telegram convention: outgoing always pulls to bottom; incoming only
                         // pulls if the user was already parked there. Only auto-scroll when we
@@ -407,16 +417,19 @@ struct MessageListView: View {
                     .onChange(of: isAtBottom) { _, atBottom in
                         if atBottom { newBelowCount = 0 }
                     }
-                    .overlay(alignment: .bottomTrailing) {
-                        if didApplyInitialScroll, !isAtBottom || !store.window.reachesChatTail {
-                            jumpToBottomButton(proxy: proxy)
-                                .padding(.trailing, 10)
-                                .padding(.bottom, 18)
-                                .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: isAtBottom)
                 }
+                // A sibling above the whole chat (not an overlay of the ScrollView, where
+                // the button didn't receive taps on the watch).
+                .overlay(alignment: .bottomTrailing) {
+                    if didApplyInitialScroll, !isAtBottom || !store.window.reachesChatTail {
+                        jumpToBottomButton(proxy: proxy)
+                            .padding(.trailing, 10)
+                            .padding(.bottom, 18)
+                            .transition(.opacity)
+                            .zIndex(1)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: isAtBottom)
             }
             // Cover the first-layout→settle window (the `.task` above re-pins to the final
             // position until contentSize stabilizes) so the user never sees the jump.
@@ -436,10 +449,7 @@ struct MessageListView: View {
 
     private func jumpToBottomButton(proxy: ScrollViewProxy) -> some View {
         let unseen = newBelowCount + store.unseenNewerCount
-        return Button {
-            scrollToBottom(proxy: proxy)
-        } label: {
-            Image(systemName: "chevron.down")
+        return Image(systemName: "chevron.down")
                 .font(.system(size: 14, weight: .semibold))
                 .frame(width: 32, height: 32)
                 .contentShape(Circle())
@@ -455,23 +465,40 @@ struct MessageListView: View {
                             .offset(y: -8)
                     }
                 }
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("jumpToBottom")
+                // A tap gesture, like the reply header's, rather than a Button.
+                .onTapGesture { scrollToBottom(proxy: proxy) }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("jumpToBottom")
     }
 
     /// Jump-to-bottom tap: reloads the chat tail first when the window was moved away
     /// from it (a reply jump, or paging up far), then pins the bottom while the lazy
     /// rows above it settle their heights.
     private func scrollToBottom(proxy: ScrollViewProxy) {
+        WKInterfaceDevice.current().play(.click)
+        DebugTrace.log("jumpToBottom tap atBottom=\(isAtBottom) tail=\(store.window.reachesChatTail) rows=\(store.rows.count) anchor=\(scrollAnchorId ?? "nil")")
         Task {
             await store.jumpToBottom()
-            for _ in 0..<5 {
+            DebugTrace.log("jumpToBottom loaded tail=\(store.window.reachesChatTail) rows=\(store.rows.count)")
+            // Same settle loop as the initial positioning: re-pin every frame until the
+            // lazy rows above the bottom stop changing the content height.
+            var lastHeight: CGFloat = -1
+            var stableFrames = 0
+            for _ in 0..<45 {
                 proxy.scrollTo("bottomAnchor", anchor: .bottom)
-                try? await Task.sleep(nanoseconds: 40_000_000)
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                if observedContentHeight == lastHeight {
+                    stableFrames += 1
+                    if stableFrames >= 3 { break }
+                } else {
+                    stableFrames = 0
+                    lastHeight = observedContentHeight
+                }
             }
+            proxy.scrollTo("bottomAnchor", anchor: .bottom)
             isAtBottom = true
             newBelowCount = 0
+            DebugTrace.log("jumpToBottom done anchor=\(scrollAnchorId ?? "nil")")
         }
     }
 

@@ -16,8 +16,10 @@ struct MessageRowView: View {
         rowBody
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 guard visible else { return }
-                if index <= 2 { onEnterTopEdge?() }
-                if index >= count - 3 { onEnterBottomEdge?() }
+                // Start paging a few rows before the edge, so the next page is usually
+                // in place by the time the user scrolls there.
+                if index <= 8 { onEnterTopEdge?() }
+                if index >= count - 9 { onEnterBottomEdge?() }
             }
     }
 
