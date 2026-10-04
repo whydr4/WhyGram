@@ -16,13 +16,17 @@ import WhisperKit
 final class SpeechRecognizer {
     static let shared = SpeechRecognizer()
 
-    /// The Whisper sizes WhisperKit supports on the watch (Watch7 / Watch8): OpenAI's
-    /// multilingual Tiny and Base, and a Base fine-tuned on Russian speech, converted
-    /// with whisperkittools (installed from the Mac until it has a download source).
+    /// OpenAI's multilingual Tiny and Base (the sizes WhisperKit supports on Watch7 /
+    /// Watch8), a Base fine-tuned on Russian speech (whitemouse84/whisper-base-ru,
+    /// converted with whisperkittools; installed from the Mac until it has a download
+    /// source), and Small quantized to 216 MB, which WhisperKit doesn't list for the
+    /// watch: much better Russian (word errors 12% vs 20% for Base on read speech,
+    /// 43% vs 54% on phone speech) if it fits in the watch's memory.
     enum Model: String, CaseIterable, Identifiable {
         case tiny = "openai_whisper-tiny"
         case base = "openai_whisper-base"
         case baseRussian = "whygram_whisper-base-ru"
+        case small = "openai_whisper-small_216MB"
 
         var id: String { rawValue }
         var title: String {
@@ -30,6 +34,7 @@ final class SpeechRecognizer {
             case .tiny: return "Tiny"
             case .base: return "Base"
             case .baseRussian: return "Base Russian"
+            case .small: return "Small (experimental)"
             }
         }
 
@@ -41,6 +46,7 @@ final class SpeechRecognizer {
             case .tiny: return ("argmaxinc/whisperkit-coreml", "openai/whisper-tiny")
             case .base: return ("argmaxinc/whisperkit-coreml", "openai/whisper-base")
             case .baseRussian: return nil
+            case .small: return ("argmaxinc/whisperkit-coreml", "openai/whisper-small")
             }
         }
     }
