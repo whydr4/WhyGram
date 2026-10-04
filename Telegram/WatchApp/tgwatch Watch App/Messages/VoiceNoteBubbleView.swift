@@ -81,39 +81,8 @@ struct VoiceNoteBubbleView: View {
         .onTapGesture { store.togglePlayback(note) }
     }
 
-    private var speech: SpeechRecognizer { .shared }
-
-    /// On-watch speech recognition: the text once recognized, a spinner while it runs,
-    /// or an "Aa" button when a model is downloaded and the voice file is on the watch.
-    @ViewBuilder
     private var transcriptView: some View {
-        if let text = speech.transcripts[note.voiceFileId]?.text {
-            Text(text)
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
-        } else if speech.inProgress.contains(note.voiceFileId) {
-            HStack(spacing: 4) {
-                ProgressView().controlSize(.mini)
-                Text("Recognizing…").font(.caption2).foregroundStyle(style.secondary)
-            }
-        } else if speech.isDownloaded, let path = note.localPath {
-            HStack(spacing: 6) {
-                Button {
-                    speech.transcribe(voiceFileId: note.voiceFileId, path: path)
-                } label: {
-                    Text("Aa")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(style.secondary.opacity(0.25)))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Transcribe")
-                if let error = speech.transcripts[note.voiceFileId]?.error {
-                    Text(error).font(.system(size: 9)).foregroundStyle(.red).lineLimit(2)
-                }
-            }
-        }
+        TranscriptView(fileId: note.voiceFileId, path: note.localPath, kind: .voice, secondary: style.secondary)
     }
 
     @ViewBuilder
@@ -171,6 +140,71 @@ struct VoiceNoteBubbleView: View {
         rate == rate.rounded() ? "\(Int(rate))×" : "\(rate.formatted(.number.precision(.fractionLength(1))))×"
     }
 
+}
+
+/// On-watch speech recognition under a voice or video note: the text once recognized,
+/// a spinner while it runs or waits, or an "Aa" button when a model is installed. A tap
+/// on a note whose file isn't on the watch yet downloads it first. With automatic
+/// transcription on, a note is queued as soon as its file is here.
+struct TranscriptView: View {
+    let fileId: Int
+    let path: String?
+    let kind: SpeechRecognizer.MediaKind
+    let secondary: Color
+
+    @Environment(ChatHistoryStore.self) private var store
+    @State private var waitingForFile = false
+
+    private var speech: SpeechRecognizer { .shared }
+
+    var body: some View {
+        content
+            .onChange(of: path, initial: true) { _, path in
+                guard let path else { return }
+                if waitingForFile {
+                    waitingForFile = false
+                    speech.transcribe(fileId: fileId, path: path, kind: kind)
+                } else {
+                    speech.autoTranscribeIfEnabled(fileId: fileId, path: path, kind: kind)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let text = speech.transcripts[fileId]?.text {
+            Text(text)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if speech.inProgress.contains(fileId) || waitingForFile {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("Recognizing…").font(.caption2).foregroundStyle(secondary)
+            }
+        } else if speech.isDownloaded {
+            HStack(spacing: 6) {
+                Button {
+                    if let path {
+                        speech.transcribe(fileId: fileId, path: path, kind: kind)
+                    } else {
+                        waitingForFile = true
+                        store.requestFileDownload(fileId: fileId, priority: 2)
+                    }
+                } label: {
+                    Text("Aa")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(secondary.opacity(0.25)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Transcribe")
+                if let error = speech.transcripts[fileId]?.error {
+                    Text(error).font(.system(size: 9)).foregroundStyle(.red).lineLimit(2)
+                }
+            }
+        }
+    }
 }
 
 #if DEBUG

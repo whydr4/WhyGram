@@ -131,18 +131,20 @@ final class TDClient {
         }
     }
 
-    /// The newest voice message in any chat, downloaded: its local path and duration.
-    /// Used by Settings to try speech recognition. Fork only.
-    func latestVoiceNote() async throws -> (path: String, duration: Int)? {
+    /// The newest voice (or video) message in any chat, downloaded: its local path.
+    /// Used by Settings ▸ Diagnostics to try speech recognition. Fork only.
+    func latestNote(video: Bool) async throws -> String? {
         guard let client else { return nil }
-        let found = try await client.searchMessages(filterType: "searchMessagesFilterVoiceNote", limit: 1)
-        guard let message = found.messages.first,
-              case .messageVoiceNote(let note) = message.content else { return nil }
-        let file = try await client.downloadFile(
-            fileId: note.voiceNote.voice.id, limit: 0, offset: 0, priority: 32, synchronous: true
-        )
-        guard file.local.isDownloadingCompleted else { return nil }
-        return (file.local.path, note.voiceNote.duration)
+        let filter = video ? "searchMessagesFilterVideoNote" : "searchMessagesFilterVoiceNote"
+        let found = try await client.searchMessages(filterType: filter, limit: 1)
+        let fileId: Int
+        switch found.messages.first?.content {
+        case .messageVoiceNote(let note)?: fileId = note.voiceNote.voice.id
+        case .messageVideoNote(let note)?: fileId = note.videoNote.video.id
+        default: return nil
+        }
+        let file = try await client.downloadFile(fileId: fileId, limit: 0, offset: 0, priority: 32, synchronous: true)
+        return file.local.isDownloadingCompleted ? file.local.path : nil
     }
 
     func logOut() async {

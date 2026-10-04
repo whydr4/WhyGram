@@ -16,13 +16,38 @@ import WhisperKit
 final class SpeechRecognizer {
     static let shared = SpeechRecognizer()
 
-    /// The Whisper variants WhisperKit supports on the watch (Watch7 / Watch8).
+    /// The Whisper sizes WhisperKit supports on the watch (Watch7 / Watch8): OpenAI's
+    /// multilingual Tiny and Base, and a Base fine-tuned on Russian speech, converted
+    /// with whisperkittools (installed from the Mac until it has a download source).
     enum Model: String, CaseIterable, Identifiable {
         case tiny = "openai_whisper-tiny"
         case base = "openai_whisper-base"
+        case baseRussian = "whygram_whisper-base-ru"
 
         var id: String { rawValue }
-        var title: String { self == .tiny ? "Tiny" : "Base" }
+        var title: String {
+            switch self {
+            case .tiny: return "Tiny"
+            case .base: return "Base"
+            case .baseRussian: return "Base Russian"
+            }
+        }
+
+        /// Where the app downloads it from: the WhisperKit model repo and the OpenAI
+        /// repo holding its tokenizer. nil: only installable from the Mac
+        /// (`.claude/watchapp-pr/push-whisper-model.sh`).
+        var remote: (repo: String, tokenizerRepo: String)? {
+            switch self {
+            case .tiny: return ("argmaxinc/whisperkit-coreml", "openai/whisper-tiny")
+            case .base: return ("argmaxinc/whisperkit-coreml", "openai/whisper-base")
+            case .baseRussian: return nil
+            }
+        }
+    }
+
+    /// What a transcribed file is: a voice note (Ogg/Opus) or a video note (MP4).
+    enum MediaKind {
+        case voice, videoNote
     }
 
     enum Language: String, CaseIterable, Identifiable {
@@ -61,18 +86,35 @@ final class SpeechRecognizer {
     }
     /// Measurements of the last download / load / transcription, shown in Settings.
     private(set) var stats: [String] = []
+    /// By TDLib file id (the voice file, or the video note's video file).
     private(set) var transcripts: [Int: Transcript] = [:]
+    /// Files being transcribed or waiting in the queue.
     private(set) var inProgress: Set<Int> = []
+    /// Transcribe voice and video notes as they show up in an open chat.
+    var autoTranscribe: Bool {
+        didSet { UserDefaults.standard.set(autoTranscribe, forKey: Self.autoKey) }
+    }
+
+    private struct Job {
+        let fileId: Int
+        let path: String
+        let kind: MediaKind
+    }
+    /// Waiting jobs, run one at a time (one model, and the watch's Neural Engine).
+    private var queue: [Job] = []
+    private var worker: Task<Void, Never>?
 
     private var pipe: WhisperKit?
     private var loadTask: Task<WhisperKit, Error>?
 
     private static let modelKey = "speech.model"
     private static let languageKey = "speech.language"
+    private static let autoKey = "speech.auto"
     private static let folderKeyPrefix = "speech.folder."
 
     private init() {
-        model = UserDefaults.standard.string(forKey: Self.modelKey).flatMap(Model.init) ?? .tiny
+        model = UserDefaults.standard.string(forKey: Self.modelKey).flatMap(Model.init) ?? .base
+        autoTranscribe = UserDefaults.standard.bool(forKey: Self.autoKey)
         language = UserDefaults.standard.string(forKey: Self.languageKey).flatMap(Language.init) ?? .russian
         transcripts = Self.loadTranscripts()
         refreshState()
@@ -215,19 +257,20 @@ final class SpeechRecognizer {
     private(set) var testResult: String?
     private(set) var isTesting = false
 
-    /// Settings' test: recognizes the newest voice message in any chat.
-    func testOnLatestVoiceNote(using client: TDClient) {
+    /// Diagnostics: recognizes the newest voice (or video) message in any chat.
+    func testOnLatestNote(video: Bool, using client: TDClient) {
         guard !isTesting else { return }
         isTesting = true
         testResult = nil
         Task {
             defer { isTesting = false }
             do {
-                guard let voice = try await client.latestVoiceNote() else {
-                    testResult = "No voice messages found."
+                guard let path = try await client.latestNote(video: video) else {
+                    testResult = "No messages found."
                     return
                 }
-                transcribe(voiceFileId: -2, path: voice.path)
+                transcripts[-2] = nil
+                transcribe(fileId: -2, path: path, kind: video ? .videoNote : .voice)
                 while inProgress.contains(-2) {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
@@ -240,48 +283,75 @@ final class SpeechRecognizer {
         }
     }
 
-    /// Recognizes the voice note at `path` (an Ogg/Opus file), once.
-    func transcribe(voiceFileId: Int, path: String) {
-        guard !inProgress.contains(voiceFileId) else { return }
-        inProgress.insert(voiceFileId)
-        transcripts[voiceFileId] = nil
-        let language = self.language
-        Task {
-            defer { inProgress.remove(voiceFileId) }
-            do {
-                let pipe = try await loadedPipe()
-                let started = Date()
-                let samples = try await Task.detached(priority: .userInitiated) {
-                    try Self.samples16k(path: path)
-                }.value
-                let decoded = Date()
-                let options = DecodingOptions(
-                    task: .transcribe,
-                    language: language == .auto ? nil : language.rawValue,
-                    temperatureFallbackCount: 2,
-                    usePrefillPrompt: language != .auto,
-                    detectLanguage: language == .auto,
-                    skipSpecialTokens: true,
-                    withoutTimestamps: true
-                )
-                let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
-                let text = results.map(\.text).joined(separator: " ")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                transcripts[voiceFileId] = Transcript(text: text.isEmpty ? "…" : text)
-                record(String(format: "%@ %.1fs audio: decode %.1fs, recognize %.1fs, memory %@",
-                              model.title, Double(samples.count) / 16_000,
-                              decoded.timeIntervalSince(started), Date().timeIntervalSince(decoded),
-                              Self.memoryFootprint()))
-            } catch {
-                transcripts[voiceFileId] = Transcript(error: error.localizedDescription)
-                record("transcribe failed: \(error.localizedDescription)")
+    /// Queues a voice or video note for recognition, once. A tap (`urgent`) goes ahead
+    /// of notes queued automatically.
+    func transcribe(fileId: Int, path: String, kind: MediaKind, urgent: Bool = true) {
+        guard isDownloaded, !inProgress.contains(fileId), transcripts[fileId]?.text == nil else { return }
+        inProgress.insert(fileId)
+        transcripts[fileId] = nil
+        let job = Job(fileId: fileId, path: path, kind: kind)
+        if urgent { queue.insert(job, at: 0) } else { queue.append(job) }
+        runQueue()
+    }
+
+    /// Automatic transcription of a note that came into view, when it's switched on.
+    func autoTranscribeIfEnabled(fileId: Int, path: String?, kind: MediaKind) {
+        guard autoTranscribe, let path, transcripts[fileId] == nil else { return }
+        transcribe(fileId: fileId, path: path, kind: kind, urgent: false)
+    }
+
+    private func runQueue() {
+        guard worker == nil else { return }
+        worker = Task {
+            while !queue.isEmpty {
+                let job = queue.removeFirst()
+                await run(job)
+                inProgress.remove(job.fileId)
             }
+            worker = nil
             saveTranscripts()
         }
     }
 
-    /// 16 kHz mono samples of an Ogg/Opus voice note, as Whisper takes them.
-    private nonisolated static func samples16k(path: String) throws -> [Float] {
+    private func run(_ job: Job) async {
+        let language = self.language
+        do {
+            let pipe = try await loadedPipe()
+            let started = Date()
+            let samples = try await Task.detached(priority: .userInitiated) {
+                try Self.samples16k(path: job.path, kind: job.kind)
+            }.value
+            let decoded = Date()
+            let options = DecodingOptions(
+                task: .transcribe,
+                language: language == .auto ? nil : language.rawValue,
+                temperatureFallbackCount: 2,
+                usePrefillPrompt: language != .auto,
+                detectLanguage: language == .auto,
+                skipSpecialTokens: true,
+                withoutTimestamps: true
+            )
+            let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
+            let text = results.map(\.text).joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            transcripts[job.fileId] = Transcript(text: text.isEmpty ? "…" : text)
+            record(String(format: "%@ %.1fs %@: decode %.1fs, recognize %.1fs, memory %@",
+                          model.title, Double(samples.count) / 16_000, job.kind == .voice ? "voice" : "video note",
+                          decoded.timeIntervalSince(started), Date().timeIntervalSince(decoded),
+                          Self.memoryFootprint()))
+        } catch {
+            transcripts[job.fileId] = Transcript(error: error.localizedDescription)
+            record("transcribe failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// 16 kHz mono samples, as Whisper takes them: decoded from an Ogg/Opus voice note
+    /// with OpusKit (AVAudioFile can't read Opus), or read from a video note's MP4
+    /// audio track by WhisperKit's loader.
+    private nonisolated static func samples16k(path: String, kind: MediaKind) throws -> [Float] {
+        if kind == .videoNote {
+            return try AudioProcessor.loadAudioAsFloatArray(fromPath: path)
+        }
         let decoded = try OpusDecoder.decodePCM(url: URL(fileURLWithPath: path))
         guard let resampled = AudioProcessor.resampleAudio(fromBuffer: decoded.pcm, toSampleRate: 16_000, channelCount: 1) else {
             throw RecognizerError.resampleFailed
@@ -356,16 +426,19 @@ private enum ModelFetcher {
 
     enum FetchError: LocalizedError {
         case http(Int, String)
+        case noSource
         var errorDescription: String? {
             switch self {
             case .http(let code, let file): return "Download failed (HTTP \(code)) for \(file)"
+            case .noSource: return "This model is installed from the Mac."
             }
         }
     }
 
     static func fetch(model: SpeechRecognizer.Model, progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
-        let repo = "https://huggingface.co/argmaxinc/whisperkit-coreml"
-        let listURL = URL(string: "https://huggingface.co/api/models/argmaxinc/whisperkit-coreml/tree/main/\(model.rawValue)?recursive=true")!
+        guard let remote = model.remote else { throw FetchError.noSource }
+        let repo = "https://huggingface.co/\(remote.repo)"
+        let listURL = URL(string: "https://huggingface.co/api/models/\(remote.repo)/tree/main/\(model.rawValue)?recursive=true")!
         let (listData, listResponse) = try await URLSession.shared.data(from: listURL)
         try check(listResponse, file: "file list")
         var files = try JSONDecoder().decode([Entry].self, from: listData)
@@ -374,9 +447,8 @@ private enum ModelFetcher {
                     relative: String($0.path.dropFirst(model.rawValue.count + 1)),
                     size: $0.size ?? 0) }
         // The tokenizer lives in OpenAI's repo; WhisperKit also looks in the model folder.
-        let size = model == .tiny ? "tiny" : "base"
         for name in ["tokenizer.json", "tokenizer_config.json"] {
-            files.append((URL(string: "https://huggingface.co/openai/whisper-\(size)/resolve/main/\(name)")!, name, 0))
+            files.append((URL(string: "https://huggingface.co/\(remote.tokenizerRepo)/resolve/main/\(name)")!, name, 0))
         }
         let total = max(files.reduce(0) { $0 + $1.size }, 1)
 
