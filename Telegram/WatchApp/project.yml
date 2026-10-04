@@ -32,6 +32,9 @@ packages:
   QRCodeGenerator:
     url: https://github.com/fwcd/swift-qrcode-generator
     exactVersion: 2.0.2
+  WhisperKit:
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    exactVersion: 1.1.0
   RLottieKit:
     path: Packages/RLottieKit
   WebPKit:
@@ -101,6 +104,8 @@ targets:
         product: WebPKit
       - package: OpusKit
         product: OpusKit
+      - package: WhisperKit
+        product: WhisperKit
 schemes:
   tgwatch Watch App:
     build:

@@ -67,6 +67,7 @@ struct VoiceNoteBubbleView: View {
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            transcriptView
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -78,6 +79,41 @@ struct VoiceNoteBubbleView: View {
         .foregroundStyle(style.content)
         .contentShape(Rectangle())
         .onTapGesture { store.togglePlayback(note) }
+    }
+
+    private var speech: SpeechRecognizer { .shared }
+
+    /// On-watch speech recognition: the text once recognized, a spinner while it runs,
+    /// or an "Aa" button when a model is downloaded and the voice file is on the watch.
+    @ViewBuilder
+    private var transcriptView: some View {
+        if let text = speech.transcripts[note.voiceFileId]?.text {
+            Text(text)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if speech.inProgress.contains(note.voiceFileId) {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("Recognizing…").font(.caption2).foregroundStyle(style.secondary)
+            }
+        } else if speech.isDownloaded, let path = note.localPath {
+            HStack(spacing: 6) {
+                Button {
+                    speech.transcribe(voiceFileId: note.voiceFileId, path: path)
+                } label: {
+                    Text("Aa")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(style.secondary.opacity(0.25)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Transcribe")
+                if let error = speech.transcripts[note.voiceFileId]?.error {
+                    Text(error).font(.system(size: 9)).foregroundStyle(.red).lineLimit(2)
+                }
+            }
+        }
     }
 
     @ViewBuilder

@@ -70,6 +70,15 @@ extension TDLibApi {
         ))
     }
 
+    /// The newest messages across all chats matching a `searchMessagesFilter*` type
+    /// (e.g. "searchMessagesFilterVoiceNote").
+    public final func searchMessages(filterType: String, limit: Int) async throws -> FoundMessages {
+        try await forkRun(SearchMessages(
+            chatList: nil, query: "", offset: "", limit: limit,
+            filter: SearchMessagesFilter(type: filterType), minDate: 0, maxDate: 0
+        ))
+    }
+
     /// Marks all mentions in a chat as read.
     @discardableResult
     public final func readAllChatMentions(chatId: Int64) async throws -> Ok {
@@ -175,6 +184,22 @@ public struct SearchMessagesFilter: Codable, Equatable, Hashable {
     public init(type: String) { self.type = type }
 
     private enum CodingKeys: String, CodingKey { case type = "@type" }
+}
+
+public struct SearchMessages: Codable, Equatable, Hashable {
+    public let chatList: ChatList?
+    public let query: String
+    public let offset: String
+    public let limit: Int
+    public let filter: SearchMessagesFilter
+    public let minDate: Int
+    public let maxDate: Int
+}
+
+public struct FoundMessages: Codable, Equatable, Hashable {
+    public let totalCount: Int
+    public let messages: [Message]
+    public let nextOffset: String
 }
 
 public struct ReadAllChatMentions: Codable, Equatable, Hashable {

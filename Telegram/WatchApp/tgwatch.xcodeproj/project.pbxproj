@@ -75,6 +75,8 @@
 		9FC324F2FEBBDF3C24360CA3 /* LocationBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596AF8BF88C38D2018397A33 /* LocationBubbleView.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E03 /* DebugTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */; };
+		D1CA0E1A6E5B4C2F9A7B3E09 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */; };
+		D1CA0E1A6E5B4C2F9A7B3E07 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E05 /* MessageActionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E06 /* MessageActionsView.swift */; };
 		A0899809BBC92D1563AC4160 /* ReplyBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7584BF25A84BAD24AB992A79 /* ReplyBar.swift */; };
 		A121DA7622C910B267D69B6E /* PhotoBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F7533C5A9B419B29727C86 /* PhotoBubbleView.swift */; };
@@ -101,6 +103,7 @@
 		D1082945B5785B08F820FB78 /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93535C2021AB2E7B17F593AA /* LoadingView.swift */; };
 		D1E96E63A3AE93646AD3F532 /* AudioBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3B71804A398A0100375E86 /* AudioBubbleView.swift */; };
 		D5515C5A9286E0372DBFB7F9 /* QRCodeGenerator in Frameworks */ = {isa = PBXBuildFile; productRef = FD6A04697FEA6C4614973F19 /* QRCodeGenerator */; };
+		E1A5F00D1A2B3C4D5E6F7A03 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E1A5F00D1A2B3C4D5E6F7A02 /* WhisperKit */; };
 		DC1BB1D3B075945C5668EC61 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA750417DF3AD62C7B788F6 /* MessageListView.swift */; };
 		DD9FB33F951CC225F8D5B3EE /* UserNamesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A63843FEEB957FF475FF41D6 /* UserNamesStore.swift */; };
 		DDB206E2134B52F472D5E9FE /* TDClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB5C5FEFC91B0D5FDF164032 /* TDClient.swift */; };
@@ -175,6 +178,8 @@
 		72755AB1D5DB932DDC3CE2D3 /* SampleStickers */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SampleStickers; path = Assets/SampleStickers; sourceTree = SOURCE_ROOT; };
 		D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedImageCache.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTrace.swift; sourceTree = "<group>"; };
+		D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E06 /* MessageActionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsView.swift; sourceTree = "<group>"; };
 		7584BF25A84BAD24AB992A79 /* ReplyBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyBar.swift; sourceTree = "<group>"; };
 		7889969AFF462911B9828843 /* MessageRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRowView.swift; sourceTree = "<group>"; };
@@ -246,6 +251,7 @@
 			files = (
 				F917BC9D348452D168998A84 /* TDShim in Frameworks */,
 				D5515C5A9286E0372DBFB7F9 /* QRCodeGenerator in Frameworks */,
+				E1A5F00D1A2B3C4D5E6F7A03 /* WhisperKit in Frameworks */,
 				2A0FDF9EF2B8BE9F4C46FD4C /* RLottieKit in Frameworks */,
 				87EF3EB5EB8BD10F1F65EDAB /* WebPKit in Frameworks */,
 				12810A4953467A087E07DD3F /* OpusKit in Frameworks */,
@@ -377,6 +383,8 @@
 				DF0F4F15CB43635717B31B92 /* PollVoteView.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */,
+				D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */,
+				D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E06 /* MessageActionsView.swift */,
 				7584BF25A84BAD24AB992A79 /* ReplyBar.swift */,
 				DDCE599C8D50EE8832B4A797 /* ReplyFormatters.swift */,
@@ -458,6 +466,7 @@
 			packageProductDependencies = (
 				36B07FC482F9E6A9D62DB94F /* TDShim */,
 				FD6A04697FEA6C4614973F19 /* QRCodeGenerator */,
+				E1A5F00D1A2B3C4D5E6F7A02 /* WhisperKit */,
 				5083D73573D84E386C2E3B4C /* RLottieKit */,
 				F573B77B0568E47F98C5A063 /* WebPKit */,
 				4A4F9C233953209CE4C3DB1A /* OpusKit */,
@@ -491,6 +500,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				3238C4183C24EDCED74DC210 /* XCRemoteSwiftPackageReference "swift-qrcode-generator" */,
+				E1A5F00D1A2B3C4D5E6F7A01 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 				A7CE5619475EAC61ADB3AD3C /* XCLocalSwiftPackageReference "Packages/OpusKit" */,
 				CD4B01D8F7053200FFFBF7EC /* XCLocalSwiftPackageReference "Packages/RLottieKit" */,
 				4CFFE520C87190BF6D6872EC /* XCLocalSwiftPackageReference "Packages/TDShim" */,
@@ -589,6 +599,8 @@
 				B9F6D473AA0F1DAF77799E77 /* QrLoginView.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E03 /* DebugTrace.swift in Sources */,
+				D1CA0E1A6E5B4C2F9A7B3E09 /* SettingsView.swift in Sources */,
+				D1CA0E1A6E5B4C2F9A7B3E07 /* SpeechRecognizer.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E05 /* MessageActionsView.swift in Sources */,
 				A0899809BBC92D1563AC4160 /* ReplyBar.swift in Sources */,
 				FC110506EAA6FA010E83F407 /* ReplyFormatters.swift in Sources */,
@@ -847,6 +859,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		E1A5F00D1A2B3C4D5E6F7A01 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift";
+			requirement = {
+				kind = exactVersion;
+				version = 1.1.0;
+			};
+		};
 		3238C4183C24EDCED74DC210 /* XCRemoteSwiftPackageReference "swift-qrcode-generator" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/fwcd/swift-qrcode-generator";
@@ -858,6 +878,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		E1A5F00D1A2B3C4D5E6F7A02 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E1A5F00D1A2B3C4D5E6F7A01 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
+			productName = WhisperKit;
+		};
 		36B07FC482F9E6A9D62DB94F /* TDShim */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TDShim;

@@ -7,6 +7,7 @@ struct ChatListView: View {
 
     @State private var dismissedLastError: String? = nil
     @State private var opener = ChatOpener()
+    @State private var showSettings = false
     /// Bound to the outer chat-list `List`. Re-asserted after every pill tap so the
     /// digital crown stays glued to the chat list, never the pill bar's horizontal
     /// ScrollView (where rotation has no useful effect). watchOS otherwise routes
@@ -38,6 +39,7 @@ struct ChatListView: View {
                 // glitches mid-reshape. With the bar present here, the push
                 // only has to morph content, not allocate a new glass surface.
                 .toolbar(.visible, for: .navigationBar)
+                .navigationDestination(isPresented: $showSettings) { SettingsView() }
                 // Must live INSIDE the NavigationStack so the modifier's
                 // .navigationDestination(isPresented:) attaches to it.
                 .accountSwitcherSheet(presentation: .push, logoutAffordance: .allowed)
@@ -63,12 +65,29 @@ struct ChatListView: View {
             // bar (which watchOS doesn't animate, so it popped). One row, so the gap
             // between title and pills isn't a list row's minimum height.
             VStack(alignment: .trailing, spacing: 6) {
-                Text("WhyGram")
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
-                    // Lines up with the clock's trailing edge, where the bar title was.
-                    .padding(.trailing, 13)
-                    .accessibilityAddTraits(.isHeader)
+                HStack {
+                    // Settings, on the title's line (a bar button would make the bar
+                    // taller and push the list down).
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 30, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 6)
+                    .accessibilityLabel("Settings")
+                    Spacer()
+                    Text("WhyGram")
+                        .font(.headline)
+                        .foregroundStyle(Color.accentColor)
+                        // Lines up with the clock's trailing edge, where the bar title was.
+                        .padding(.trailing, 13)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 if store.pills.count > 1 {
                     FolderPillBar(pills: store.pills, onSelect: { pill in
                         switchTo(pill: pill, proxy: proxy)
