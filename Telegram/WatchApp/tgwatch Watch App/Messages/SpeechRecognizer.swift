@@ -88,7 +88,11 @@ final class SpeechRecognizer {
     /// Where `WhisperKit.download` puts a model under `baseURL`; also where
     /// `.claude/watchapp-pr/push-whisper-model.sh` copies one from the Mac.
     private static func standardFolder(_ model: Model) -> URL {
-        baseURL.appendingPathComponent("models/argmaxinc/whisperkit-coreml/\(model.rawValue)", isDirectory: true)
+        modelsRoot.appendingPathComponent(model.rawValue, isDirectory: true)
+    }
+
+    static var modelsRoot: URL {
+        baseURL.appendingPathComponent("models/argmaxinc/whisperkit-coreml", isDirectory: true)
     }
 
     /// The downloaded model's folder, if it's there.
@@ -120,6 +124,11 @@ final class SpeechRecognizer {
         }
     }
 
+    /// Downloads the model with plain URLSession rather than `WhisperKit.download`:
+    /// WhisperKit's hub client decides it's offline from `NWPathMonitor`, which watchOS
+    /// reports as unsatisfied for ordinary apps (no low-level networking), and then
+    /// fails with "Repository not available locally". The tokenizer goes into the model
+    /// folder, where WhisperKit looks for it, so loading needs no network either.
     func download() {
         guard !isDownloadingOrLoading else { return }
         let model = self.model
@@ -127,24 +136,15 @@ final class SpeechRecognizer {
         Task {
             let started = Date()
             do {
-                try FileManager.default.createDirectory(at: Self.baseURL, withIntermediateDirectories: true)
-                let folder = try await WhisperKit.download(
-                    variant: model.rawValue,
-                    downloadBase: Self.baseURL,
-                    progressCallback: { progress in
-                        let fraction = progress.fractionCompleted
-                        Task { @MainActor in
-                            if case .downloading = SpeechRecognizer.shared.state {
-                                SpeechRecognizer.shared.state = .downloading(fraction)
-                            }
-                        }
+                let folder = try await ModelFetcher.fetch(model: model) { fraction in
+                    if case .downloading = SpeechRecognizer.shared.state {
+                        SpeechRecognizer.shared.state = .downloading(fraction)
                     }
-                )
+                }
                 UserDefaults.standard.set(folder.path, forKey: Self.folderKeyPrefix + model.rawValue)
                 record(String(format: "download %@: %.0fs, %@", model.title, Date().timeIntervalSince(started),
                               downloadedSize ?? "?"))
-                // Load right away: the first load compiles the model and fetches the
-                // tokenizer, which needs the network too.
+                // Load right away: the first load compiles the model for the Neural Engine.
                 state = .loading
                 _ = try await loadedPipe()
                 state = .ready
@@ -342,5 +342,98 @@ final class SpeechRecognizer {
         }
         guard result == KERN_SUCCESS else { return "?" }
         return ByteCountFormatter.string(fromByteCount: Int64(info.phys_footprint), countStyle: .memory)
+    }
+}
+
+/// Downloads a WhisperKit model from Hugging Face file by file with URLSession.
+@MainActor
+private enum ModelFetcher {
+    private struct Entry: Decodable {
+        let type: String
+        let path: String
+        let size: Int64?
+    }
+
+    enum FetchError: LocalizedError {
+        case http(Int, String)
+        var errorDescription: String? {
+            switch self {
+            case .http(let code, let file): return "Download failed (HTTP \(code)) for \(file)"
+            }
+        }
+    }
+
+    static func fetch(model: SpeechRecognizer.Model, progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        let repo = "https://huggingface.co/argmaxinc/whisperkit-coreml"
+        let listURL = URL(string: "https://huggingface.co/api/models/argmaxinc/whisperkit-coreml/tree/main/\(model.rawValue)?recursive=true")!
+        let (listData, listResponse) = try await URLSession.shared.data(from: listURL)
+        try check(listResponse, file: "file list")
+        var files = try JSONDecoder().decode([Entry].self, from: listData)
+            .filter { $0.type == "file" }
+            .map { (url: URL(string: "\(repo)/resolve/main/\($0.path)")!,
+                    relative: String($0.path.dropFirst(model.rawValue.count + 1)),
+                    size: $0.size ?? 0) }
+        // The tokenizer lives in OpenAI's repo; WhisperKit also looks in the model folder.
+        let size = model == .tiny ? "tiny" : "base"
+        for name in ["tokenizer.json", "tokenizer_config.json"] {
+            files.append((URL(string: "https://huggingface.co/openai/whisper-\(size)/resolve/main/\(name)")!, name, 0))
+        }
+        let total = max(files.reduce(0) { $0 + $1.size }, 1)
+
+        // Into a staging folder, renamed at the end, so a cut-off download never
+        // looks like a complete model.
+        let final = SpeechRecognizer.modelsRoot.appendingPathComponent(model.rawValue, isDirectory: true)
+        let staging = SpeechRecognizer.modelsRoot.appendingPathComponent(model.rawValue + ".partial", isDirectory: true)
+        let fm = FileManager.default
+        try? fm.removeItem(at: staging)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+
+        var done: Int64 = 0
+        for file in files {
+            let destination = staging.appendingPathComponent(file.relative)
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let base = done
+            try await download(file.url, to: destination) { received in
+                progress(min(Double(base + received) / Double(total), 1))
+            }
+            done += file.size
+        }
+        try? fm.removeItem(at: final)
+        try fm.moveItem(at: staging, to: final)
+        progress(1)
+        return final
+    }
+
+    /// Downloads one file, reporting bytes received so far while it runs.
+    private static func download(_ url: URL, to destination: URL, received: @escaping @MainActor (Int64) -> Void) async throws {
+        var task: URLSessionDownloadTask?
+        let poller = Task { @MainActor in
+            while !Task.isCancelled {
+                if let task { received(task.countOfBytesReceived) }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+        defer { poller.cancel() }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let downloadTask = URLSession.shared.downloadTask(with: url) { location, response, error in
+                if let error { continuation.resume(throwing: error); return }
+                do {
+                    try check(response, file: url.lastPathComponent)
+                    guard let location else { throw URLError(.cannotOpenFile) }
+                    try? FileManager.default.removeItem(at: destination)
+                    try FileManager.default.moveItem(at: location, to: destination)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            task = downloadTask
+            downloadTask.resume()
+        }
+    }
+
+    private nonisolated static func check(_ response: URLResponse?, file: String) throws {
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw FetchError.http(code, file) }
     }
 }
