@@ -14,7 +14,8 @@ struct StickerBubbleView: View {
     @Environment(ChatHistoryStore.self) private var store
     @Environment(\.bubbleMetrics) private var metrics
 
-    private var maxEdgePt: CGFloat { metrics.stickerMaxEdge }
+    /// A lone animated emoji is drawn at about two thirds of a sticker, as in Telegram.
+    private var maxEdgePt: CGFloat { metrics.stickerMaxEdge * (sticker.isAnimatedEmoji ? 0.7 : 1) }
     private var style: BubbleStyle { .resolve(isOutgoing: isOutgoing) }
 
     var body: some View {
@@ -69,22 +70,24 @@ struct StickerBubbleView: View {
         }
     }
 
+    /// No still to show: the sticker's emoji at jumbo size stands in for it, or a
+    /// "Sticker" label when it has none.
+    @ViewBuilder
     private var unsupportedBubble: some View {
-        HStack(spacing: 4) {
-            Text("[Sticker]")
-            if !sticker.emoji.isEmpty {
-                Text(sticker.emoji)
-            }
+        if sticker.emoji.isEmpty {
+            Text("Sticker")
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(minWidth: BubbleShape.minSize, minHeight: BubbleShape.minSize)
+                .background(
+                    RoundedRectangle(cornerRadius: BubbleShape.cornerRadius)
+                        .fill(style.fill)
+                )
+                .foregroundStyle(style.content)
+        } else {
+            Text(sticker.emoji).font(.system(size: 52))
         }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .frame(minWidth: BubbleShape.minSize, minHeight: BubbleShape.minSize)
-        .background(
-            RoundedRectangle(cornerRadius: BubbleShape.cornerRadius)
-                .fill(style.fill)
-        )
-        .foregroundStyle(style.content)
     }
 
     /// Aspect-fits the sticker's native dims into a `maxEdgePt × maxEdgePt` box.

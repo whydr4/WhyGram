@@ -10,6 +10,8 @@ struct StickerVisual: Identifiable, Equatable, Hashable {
 
     /// TDLib file id of the main sticker file (WEBP body / TGS body / WEBM body).
     let fileId: Int
+    /// A lone emoji's animated sticker, drawn smaller than a regular sticker.
+    var isAnimatedEmoji = false
     let format: StickerFormatKind
     /// Pixel width, as authored by the sender. Used for aspect ratio.
     let width: Int

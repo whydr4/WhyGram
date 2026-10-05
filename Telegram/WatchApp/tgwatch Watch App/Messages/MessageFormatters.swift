@@ -22,7 +22,33 @@ func messageBody(_ content: MessageContent, isOutgoing: Bool = false) -> String 
     case .messageVenue:          return ""
     case .messageContact:        return "Contact"
     case .messagePoll:           return ""
+    case .messageAnimation(let m): return m.caption.text
+    // Drawn as a sticker when it has one (`stickerVisual`); otherwise this text, which
+    // a lone emoji turns into a jumbo emoji.
+    case .messageAnimatedEmoji(let m): return m.emoji
+    case .messageDice(let m):    return diceText(emoji: m.emoji, value: m.value, isSlotMachine: m.finalState.isSlotMachine)
+    case .messageStakeDice(let m): return diceText(emoji: "🎲", value: m.value, isSlotMachine: m.finalState.isSlotMachine)
     default:                     return ""
+    }
+}
+
+/// A dice roll without a sticker to show: the slot machine's three reels as symbols,
+/// or the emoji and the number rolled (just the emoji while it's still rolling).
+func diceText(emoji: String, value: Int, isSlotMachine: Bool) -> String {
+    guard value > 0 else { return emoji }
+    if isSlotMachine {
+        // 1...64: two bits per reel, left reel lowest (Telegram's encoding).
+        let symbols = ["BAR", "🍇", "🍋", "7️⃣"]
+        let v = value - 1
+        return "🎰 " + [v & 3, (v >> 2) & 3, (v >> 4) & 3].map { symbols[$0] }.joined(separator: " ")
+    }
+    return "\(emoji) \(value)"
+}
+
+private extension Optional where Wrapped == DiceStickers {
+    var isSlotMachine: Bool {
+        if case .diceStickersSlotMachine = self { return true }
+        return false
     }
 }
 
@@ -40,7 +66,8 @@ func isUnsupportedContent(_ content: MessageContent) -> Bool {
     case .messageText, .messagePhoto, .messageVideo, .messageVideoNote,
          .messageVoiceNote, .messageAudio, .messageSticker, .messageDocument,
          .messageLocation, .messageVenue, .messageContact, .messagePoll,
-         .messageCall, .messageGroupCall:
+         .messageCall, .messageGroupCall, .messageAnimation, .messageAnimatedEmoji,
+         .messageDice, .messageStakeDice:
         return false
     default:
         return true

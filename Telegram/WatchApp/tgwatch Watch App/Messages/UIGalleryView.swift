@@ -308,6 +308,14 @@ struct GallerySection: Identifiable {
             .service(ServiceLine(messageId: b.id(), text: "Alice joined the group")),
             .service(ServiceLine(messageId: b.id(), text: "Константин Константинопольский-Александровский added Alice, Bob, Ира, Max and 12 others")),
             .service(ServiceLine(messageId: b.id(), text: "Bob pinned «Очень длинное закреплённое сообщение, которое не помещается в одну строку»")),
+            .service(ServiceLine(messageId: b.id(), text: "Photo has expired")),
+            .service(ServiceLine(messageId: b.id(), text: "Voice message has expired")),
+            .service(ServiceLine(messageId: b.id(), text: "Alice sent a gift 🎁 worth 50 ⭐️")),
+            .service(ServiceLine(messageId: b.id(), text: "Bob sent a unique gift 🎁 Plush Pepe #1234")),
+            .service(ServiceLine(messageId: b.id(), text: "Alice gifted Telegram Premium for 3 months")),
+            .service(ServiceLine(messageId: b.id(), text: "You paid $4.99 for «Подписка на канал»")),
+            .service(ServiceLine(messageId: b.id(), text: "Bob marked 3 tasks as done")),
+            .service(ServiceLine(messageId: b.id(), text: "Giveaway winners — 10 winners")),
             .unreadDivider(afterMessageId: b.id()),
             .daySeparator(DayLabel(key: "gallery-2", label: "Wednesday, September 30")),
         ]))
@@ -378,10 +386,40 @@ struct GallerySection: Identifiable {
         sections.append(.init(title: "Stickers", rows: [
             b.msg(false, "", sticker: m.sticker(.webp)),
             b.msg(true, "", sticker: m.sticker(.tgs)),
-            b.msg(false, "", sticker: m.sticker(.unsupported)),
+            b.msg(false, "", sticker: m.sticker(.unsupported, thumb: true)),
+            b.msg(false, "", sticker: m.sticker(.unsupported, emoji: "🐸")),
+            b.msg(false, "", sticker: m.sticker(.unsupported, emoji: "")),
             b.msg(false, "", sticker: m.sticker(.webp, loaded: false, thumb: true)),
             b.msg(false, "", sticker: m.sticker(.tgs, loaded: false, thumb: false)),
             b.msg(true, "", sticker: m.sticker(.webp), reply: replyIn),
+        ]))
+
+        sections.append(.init(title: "GIFs", rows: [
+            b.msg(false, "", video: m.gif(b.file(), m.landscape)),
+            b.msg(true, "GIF с подписью", video: m.gif(b.file(), m.square)),
+            b.msg(false, "", video: m.gif(b.file(), m.portrait, loaded: false)),
+            b.msg(false, "", sender: alice, video: m.gif(b.file(), m.wide)),
+            b.msg(false, "Reply with a GIF", video: m.gif(b.file(), m.landscape), reply: replyIn),
+        ]))
+
+        sections.append(.init(title: "Animated emoji", rows: [
+            b.msg(false, "", sticker: m.sticker(.tgs, emoji: "👍", animatedEmoji: true)),
+            b.msg(true, "", sticker: m.sticker(.tgs, emoji: "❤️", animatedEmoji: true)),
+            b.msg(false, "", sticker: m.sticker(.tgs, loaded: false, emoji: "😂", animatedEmoji: true)),
+            // A skin-toned emoji, or one without an animation, stays a jumbo text emoji.
+            b.msg(false, "👍🏽"),
+            b.msg(false, "", sender: bob, sticker: m.sticker(.tgs, emoji: "🔥", animatedEmoji: true)),
+            b.msg(true, "", sticker: m.sticker(.tgs, emoji: "🎉", animatedEmoji: true), reactions: [thumbsUp]),
+        ]))
+
+        sections.append(.init(title: "Dice", rows: [
+            b.msg(false, "🎲 5", sticker: m.sticker(.tgs, emoji: "🎲")),
+            b.msg(true, "🎯 6", sticker: m.sticker(.tgs, emoji: "🎯")),
+            b.msg(false, diceText(emoji: "🎲", value: 0, isSlotMachine: false)),
+            b.msg(false, diceText(emoji: "🏀", value: 4, isSlotMachine: false)),
+            b.msg(false, diceText(emoji: "🎰", value: 64, isSlotMachine: true)),
+            b.msg(true, diceText(emoji: "🎰", value: 23, isSlotMachine: true)),
+            b.msg(false, diceText(emoji: "🎰", value: 1, isSlotMachine: true), sender: alice),
         ]))
 
         let now = Foundation.Date()
@@ -639,6 +677,27 @@ struct GalleryMedia {
         )
     }
 
+    /// A GIF; it plays the clip `gallery-sim.sh` / `gallery-tour.sh` put in Caches.
+    func gif(_ fileId: Int, _ p: Picture, loaded: Bool = true) -> VideoVisual {
+        let clip = GalleryMedia.directory.appendingPathComponent("gif.mp4").path
+        return VideoVisual(
+            videoFileId: fileId,
+            width: p.width,
+            height: p.height,
+            duration: 2,
+            mimeType: "video/mp4",
+            preview: VideoPreview(
+                previewFileId: nil,
+                previewWidth: p.width,
+                previewHeight: p.height,
+                minithumbnail: p.mini,
+                previewLocalPath: loaded ? p.path : nil
+            ),
+            videoLocalPath: FileManager.default.fileExists(atPath: clip) ? clip : nil,
+            isAnimation: true
+        )
+    }
+
     func round(_ fileId: Int, loaded: Bool, mini: Bool = true, duration: Int = 12) -> VideoNoteVisual {
         VideoNoteVisual(
             videoFileId: fileId,
@@ -685,7 +744,7 @@ struct GalleryMedia {
         DocumentVisual(documentFileId: fileId, fileName: name, sizeBytes: size, localPath: nil, caption: caption)
     }
 
-    func sticker(_ format: StickerFormatKind, loaded: Bool = true, thumb: Bool = false) -> StickerVisual {
+    func sticker(_ format: StickerFormatKind, loaded: Bool = true, thumb: Bool = false, emoji: String = "✨", animatedEmoji: Bool = false) -> StickerVisual {
         func sample(_ name: String, _ ext: String) -> String? {
             Bundle.main.path(forResource: name, ofType: ext, inDirectory: "SampleStickers")
                 ?? Bundle.main.path(forResource: name, ofType: ext)
@@ -698,15 +757,18 @@ struct GalleryMedia {
             case .unsupported: return sample("sticker_vp9", "webm")
             }
         }()
+        // A video sticker's still is all that's ever downloaded for it, so show it ready.
+        let thumbPath = thumb && format == .unsupported ? sample("sticker_raster", "webp") : nil
         return StickerVisual(
             fileId: Int.random(in: 1_000_000...9_000_000),
+            isAnimatedEmoji: animatedEmoji,
             format: format,
             width: 512,
             height: 512,
-            emoji: "✨",
+            emoji: emoji,
             localPath: path,
             thumbnailFileId: thumb ? Int.random(in: 1_000_000...9_000_000) : nil,
-            thumbnailLocalPath: nil,
+            thumbnailLocalPath: thumbPath,
             thumbnailFormat: thumb ? .webp : nil
         )
     }

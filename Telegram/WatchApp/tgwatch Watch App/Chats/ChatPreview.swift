@@ -40,6 +40,12 @@ func chatPreview(_ chat: CachedChat, userNames: [Int64: String], selfUserId: Int
     case .messageVenue(let m): return m.venue.title.isEmpty ? "Location" : m.venue.title
     case .messageContact:  return "Contact"
     case .messagePoll:     return "Poll"
+    case .messageAnimation(let m):
+        return senderPrefix(for: last, in: chat, userNames: userNames) + (m.caption.text.isEmpty ? "GIF" : m.caption.text)
+    case .messageAnimatedEmoji(let m):
+        return senderPrefix(for: last, in: chat, userNames: userNames) + m.emoji
+    case .messageDice(let m): return senderPrefix(for: last, in: chat, userNames: userNames) + m.emoji
+    case .messageStakeDice: return senderPrefix(for: last, in: chat, userNames: userNames) + "🎲"
     case .messageCall, .messageGroupCall:
         return callSummary(last.content, isOutgoing: last.isOutgoing) ?? ""
     default:               return ""

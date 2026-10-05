@@ -40,6 +40,20 @@ private func autoDeleteDuration(seconds: Int) -> String {
     return mo == 1 ? "1 month" : "\(mo) months"
 }
 
+/// "50 ⭐️" for Telegram Stars (`XTR`), else the amount in the currency's format.
+/// `amount` is in the currency's smallest unit, as TDLib sends it.
+private func moneyLabel(_ amount: Int64, currency: String) -> String {
+    if currency == "XTR" { return "\(amount) ⭐️" }
+    let f = NumberFormatter()
+    f.numberStyle = .currency
+    f.currencyCode = currency
+    let divisor = pow(10, Double(f.maximumFractionDigits))
+    return f.string(from: NSNumber(value: Double(amount) / divisor)) ?? "\(amount) \(currency)"
+}
+
+/// "1 task" / "3 tasks".
+private func taskCount(_ n: Int) -> String { n == 1 ? "1 task" : "\(n) tasks" }
+
 /// "{m} m" under 1 km, else whole "{km} km".
 private func distanceLabel(meters: Int) -> String {
     if meters < 1000 { return "\(meters) m" }
@@ -81,6 +95,9 @@ private func pinnedSnippetPhrase(target: CachedMessage?) -> String {
     case .messageVenue:    return "a venue"
     case .messageContact:  return "a contact"
     case .messagePoll:     return "a poll"
+    case .messageAnimation: return "a GIF"
+    case .messageAnimatedEmoji(let m): return "«\(m.emoji)»"
+    case .messageDice(let m): return m.emoji
     default:               return "a message"
     }
 }
@@ -319,6 +336,88 @@ func serviceLineText(
     case .messageGiveawayCompleted(let m):
         let winners = m.winnerCount == 1 ? "1 winner" : "\(m.winnerCount) winners"
         return "Giveaway ended — \(winners)"
+
+    case .messageGiveawayWinners(let m):
+        let winners = m.winnerCount == 1 ? "1 winner" : "\(m.winnerCount) winners"
+        return "Giveaway winners — \(winners)"
+
+    case .messageGiveawayPrizeStars(let m):
+        return "Giveaway prize: \(m.starCount) ⭐️"
+
+    // Self-destructing media that has been viewed: Telegram shows a plain line.
+    case .messageExpiredPhoto:
+        return "Photo has expired"
+    case .messageExpiredVideo:
+        return "Video has expired"
+    case .messageExpiredVideoNote:
+        return "Video message has expired"
+    case .messageExpiredVoiceNote:
+        return "Voice message has expired"
+
+    case .messageGift(let m):
+        let stars = m.gift.starCount > 0 ? " worth \(m.gift.starCount) ⭐️" : ""
+        return withActor("sent a gift 🎁\(stars)", actor: actor, includeActor: includeActor)
+
+    case .messageUpgradedGift(let m):
+        return withActor("sent a unique gift 🎁 \(m.gift.title) #\(m.gift.number)", actor: actor, includeActor: includeActor)
+
+    case .messageRefundedUpgradedGift:
+        return "Gift refunded"
+
+    case .messageGiftedPremium(let m):
+        let months = m.monthCount == 1 ? "1 month" : "\(m.monthCount) months"
+        return withActor("gifted Telegram Premium for \(months)", actor: actor, includeActor: includeActor)
+
+    case .messagePremiumGiftCode(let m):
+        let months = m.monthCount == 1 ? "1 month" : "\(m.monthCount) months"
+        return "Premium gift code for \(months)"
+
+    case .messageGiftedStars(let m):
+        return withActor("gifted \(m.starCount) ⭐️", actor: actor, includeActor: includeActor)
+
+    case .messageGiftedTon:
+        return withActor("gifted TON", actor: actor, includeActor: includeActor)
+
+    case .messagePaymentSuccessful(let m):
+        let what = m.invoiceName.isEmpty ? "" : " for «\(m.invoiceName)»"
+        return "You paid \(moneyLabel(m.totalAmount, currency: m.currency))\(what)"
+
+    case .messagePaymentRefunded(let m):
+        return "Refunded \(moneyLabel(m.totalAmount, currency: m.currency))"
+
+    case .messagePaidMessagesRefunded(let m):
+        return "\(m.starCount) ⭐️ refunded for paid messages"
+
+    case .messagePaidMessagePriceChanged(let m):
+        return m.paidMessageStarCount > 0
+            ? "Messages here now cost \(m.paidMessageStarCount) ⭐️"
+            : "Messages here are free now"
+
+    case .messageChecklistTasksDone(let m):
+        if !m.markedAsDoneTaskIds.isEmpty {
+            return withActor("marked \(taskCount(m.markedAsDoneTaskIds.count)) as done", actor: actor, includeActor: includeActor)
+        }
+        return withActor("marked \(taskCount(m.markedAsNotDoneTaskIds.count)) as not done", actor: actor, includeActor: includeActor)
+
+    case .messageChecklistTasksAdded(let m):
+        return withActor("added \(taskCount(m.tasks.count)) to the checklist", actor: actor, includeActor: includeActor)
+
+    case .messagePollOptionAdded(let m):
+        return withActor("added the option «\(m.text.text)» to the poll", actor: actor, includeActor: includeActor)
+
+    case .messagePollOptionDeleted(let m):
+        return withActor("removed the option «\(m.text.text)» from the poll", actor: actor, includeActor: includeActor)
+
+    case .messageChatOwnerChanged(let m):
+        let owner = userNames[m.newOwnerUserId].flatMap { $0.isEmpty ? nil : $0 } ?? "someone else"
+        return withActor("made \(owner) the owner", actor: actor, includeActor: includeActor)
+
+    case .messageChatOwnerLeft(let m):
+        let owner = userNames[m.newOwnerUserId].flatMap { $0.isEmpty ? nil : $0 }
+        return owner.map { "The owner left; \($0) is the new owner" } ?? "The owner left"
+
+    case .messageSuggestBirthdate:
+        return withActor("suggested a birthday", actor: actor, includeActor: includeActor)
 
     default:
         return nil

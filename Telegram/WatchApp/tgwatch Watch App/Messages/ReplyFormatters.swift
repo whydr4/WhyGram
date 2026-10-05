@@ -77,6 +77,14 @@ private func replySnippet(_ content: MessageContent) -> String {
         return "Contact"
     case .messagePoll:
         return "Poll"
+    case .messageAnimation(let m):
+        return m.caption.text.isEmpty ? "GIF" : m.caption.text
+    case .messageAnimatedEmoji(let m):
+        return m.emoji
+    case .messageDice(let m):
+        return m.emoji
+    case .messageStakeDice:
+        return "🎲"
     case .messageCall, .messageGroupCall:
         return "Call"
     default:

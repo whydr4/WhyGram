@@ -166,7 +166,9 @@ struct VideoPlayerView: View {
         }
         statusObserver?.cancel()
         statusObserver = nil
-        try? AVAudioSession.sharedInstance().setActive(false)
+        if !video.isAnimation {
+            try? AVAudioSession.sharedInstance().setActive(false)
+        }
         store.cancelFileDownload(fileId: video.videoFileId)
     }
 
@@ -207,7 +209,13 @@ struct VideoPlayerView: View {
             object: p.currentItem,
             queue: .main
         ) { _ in
-            hasReachedEnd = true
+            if video.isAnimation {
+                // GIFs loop, like in Telegram.
+                p.seek(to: .zero)
+                p.play()
+            } else {
+                hasReachedEnd = true
+            }
         }
         statusObserver?.cancel()
         statusObserver = p.currentItem?.publisher(for: \.status)
@@ -220,7 +228,12 @@ struct VideoPlayerView: View {
                     logger.info("ready: audioTracks=\(audioTracks.count, privacy: .public) sessionCategory=\(AVAudioSession.sharedInstance().category.rawValue, privacy: .public)")
                 }
             }
-        activatePlaybackSession()
+        if video.isAnimation {
+            // GIFs are silent: leave the audio session (and whatever else is playing) alone.
+            p.isMuted = true
+        } else {
+            activatePlaybackSession()
+        }
         player = p
         phase = .playing
         p.play()

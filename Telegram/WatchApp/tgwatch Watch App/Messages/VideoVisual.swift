@@ -22,6 +22,9 @@ struct VideoVisual: Identifiable, Equatable, Hashable {
     let preview: VideoPreview
     /// Filesystem path of the chosen video file when downloaded; nil otherwise.
     let videoLocalPath: String?
+    /// A GIF (`messageAnimation`, an mp4 underneath): marked "GIF" instead of the
+    /// duration, and played muted on a loop.
+    var isAnimation = false
 }
 
 /// Bubble preview thumbnail. Sourced from (in order) `MessageVideo.cover`,

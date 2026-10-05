@@ -78,7 +78,7 @@ struct VideoBubbleView: View {
                 .frame(width: displaySize.width, height: displaySize.height)
                 .clipShape(RoundedRectangle(cornerRadius: clipImage ? BubbleShape.cornerRadius : 0))
                 .overlay(alignment: .topTrailing) {
-                    Text(formatDuration(video.duration))
+                    Text(video.isAnimation ? "GIF" : formatDuration(video.duration))
                         .font(.system(size: 9))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 4)

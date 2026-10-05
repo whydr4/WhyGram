@@ -229,6 +229,7 @@ private func photoVisual(for content: MessageContent, fileLocals: [Int: File]) -
 /// preview thumbnail. Both fall back to the static `File` carried by the message
 /// itself when the store hasn't seen `updateFile` yet.
 private func videoVisual(for content: MessageContent, fileLocals: [Int: File]) -> VideoVisual? {
+    if case .messageAnimation(let m) = content { return animationVisual(m, fileLocals: fileLocals) }
     guard case .messageVideo(let m) = content else { return nil }
     let chosen = selectVideoQuality(primary: m.video, alternatives: m.alternativeVideos)
     let videoFile = fileLocals[chosen.file.id] ?? chosen.file
@@ -255,6 +256,42 @@ private func videoVisual(for content: MessageContent, fileLocals: [Int: File]) -
         mimeType: chosen.mimeType,
         preview: preview,
         videoLocalPath: videoLocalPath
+    )
+}
+
+/// A GIF as a `VideoVisual`. Its still preview is the thumbnail when that's an image
+/// (GIF thumbnails are often mp4 clips, which can't be shown as a still), else the
+/// minithumbnail.
+private func animationVisual(_ m: MessageAnimation, fileLocals: [Int: File]) -> VideoVisual {
+    let a = m.animation
+    let file = fileLocals[a.animation.id] ?? a.animation
+    let localPath: String? = (file.local.isDownloadingCompleted && !file.local.path.isEmpty) ? file.local.path : nil
+    var preview = VideoPreview(
+        previewFileId: nil,
+        previewWidth: a.width,
+        previewHeight: a.height,
+        minithumbnail: a.minithumbnail?.data,
+        previewLocalPath: nil
+    )
+    if let thumb = a.thumbnail, thumbnailFormatKind(thumb.format) != .unsupported {
+        let thumbFile = fileLocals[thumb.file.id] ?? thumb.file
+        preview = VideoPreview(
+            previewFileId: thumb.file.id,
+            previewWidth: thumb.width,
+            previewHeight: thumb.height,
+            minithumbnail: a.minithumbnail?.data,
+            previewLocalPath: (thumbFile.local.isDownloadingCompleted && !thumbFile.local.path.isEmpty) ? thumbFile.local.path : nil
+        )
+    }
+    return VideoVisual(
+        videoFileId: a.animation.id,
+        width: a.width,
+        height: a.height,
+        duration: a.duration,
+        mimeType: a.mimeType,
+        preview: preview,
+        videoLocalPath: localPath,
+        isAnimation: true
     )
 }
 
