@@ -25,7 +25,7 @@ final class ChatHistoryStore {
     /// unread-outgoing dot. Updated live via `updateChatReadOutbox`.
     private(set) var lastReadOutboxMessageId: Int64
 
-    private let chatId: Int64
+    let chatId: Int64
     private let chatType: ChatType
     private let chatTailIdAtOpen: Int64?
     private let loader: ChatHistoryLoader
@@ -242,6 +242,7 @@ final class ChatHistoryStore {
     func stop() async {
         voicePlayback.tearDown()
         audioPlayback.tearDown()
+        SpeechRecognizer.shared.cancel(chatId: chatId)
         // Drain task was scheduled by markVisible during scroll; cancel so it
         // doesn't fire viewMessages against a soon-to-be-closed chat.
         viewDrainTask?.cancel()

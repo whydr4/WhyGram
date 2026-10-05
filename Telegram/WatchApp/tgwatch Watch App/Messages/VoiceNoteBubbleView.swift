@@ -82,7 +82,7 @@ struct VoiceNoteBubbleView: View {
     }
 
     private var transcriptView: some View {
-        TranscriptView(fileId: note.voiceFileId, path: note.localPath, kind: .voice, secondary: style.secondary)
+        TranscriptView(note: note, isOutgoing: isOutgoing, secondary: style.secondary)
     }
 
     @ViewBuilder
@@ -142,53 +142,70 @@ struct VoiceNoteBubbleView: View {
 
 }
 
-/// On-watch speech recognition under a voice or video note: the text once recognized,
-/// a spinner while it runs or waits, or an "Aa" button when a model is installed. A tap
-/// on a note whose file isn't on the watch yet downloads it first. With automatic
-/// transcription on, a note is queued as soon as its file is here.
+/// On-watch speech recognition under a voice note: the text once recognized (growing
+/// word by word while it's recognized), a spinner while it waits, or an "Aa" button
+/// when a model is installed. A tap on a note whose file isn't on the watch yet
+/// downloads it first. With automatic transcription on, an incoming note not listened
+/// to yet is queued as soon as its file is here.
 struct TranscriptView: View {
-    let fileId: Int
-    let path: String?
-    let kind: SpeechRecognizer.MediaKind
+    let note: VoiceNoteVisual
+    let isOutgoing: Bool
     let secondary: Color
 
     @Environment(ChatHistoryStore.self) private var store
     @State private var waitingForFile = false
 
     private var speech: SpeechRecognizer { .shared }
+    private var key: String { note.uniqueId }
 
     var body: some View {
-        content
-            .onChange(of: path, initial: true) { _, path in
-                guard let path else { return }
-                if waitingForFile {
-                    waitingForFile = false
-                    speech.transcribe(fileId: fileId, path: path, kind: kind)
-                } else {
-                    speech.autoTranscribeIfEnabled(fileId: fileId, path: path, kind: kind)
+        // A draft or a note still uploading has no unique id to keep a transcript by.
+        if !key.isEmpty {
+            content
+                .onChange(of: note.localPath, initial: true) { _, path in
+                    guard let path else { return }
+                    if waitingForFile {
+                        waitingForFile = false
+                        speech.transcribe(key: key, path: path, chatId: store.chatId)
+                    } else {
+                        speech.autoTranscribeIfEnabled(note, isOutgoing: isOutgoing, chatId: store.chatId)
+                    }
                 }
-            }
+                .onScrollVisibilityChange(threshold: 0.5) { visible in
+                    guard !isOutgoing else { return }
+                    speech.setPreloadCandidate(key, visible: visible && speech.transcripts[key]?.text == nil)
+                }
+        }
     }
 
     @ViewBuilder
     private var content: some View {
-        if let text = speech.transcripts[fileId]?.text {
+        let final = speech.transcripts[key]?.text
+        if let text = final ?? speech.partials[key] {
+            // One Text for partial and final, so new words fade in and the finished
+            // transcript settles from dimmed to full instead of swapping views.
             Text(text)
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
-        } else if speech.inProgress.contains(fileId) || waitingForFile {
+                .opacity(final == nil ? 0.6 : 1)
+                .contentTransition(.interpolate)
+                .animation(.easeOut(duration: 0.25), value: text)
+                .animation(.easeOut(duration: 0.4), value: final == nil)
+                .transition(.opacity)
+        } else if speech.inProgress.contains(key) || waitingForFile {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.mini)
                 Text("Recognizing…").font(.caption2).foregroundStyle(secondary)
             }
+            .transition(.opacity)
         } else if speech.isDownloaded {
             HStack(spacing: 6) {
                 Button {
-                    if let path {
-                        speech.transcribe(fileId: fileId, path: path, kind: kind)
+                    if let path = note.localPath {
+                        speech.transcribe(key: key, path: path, chatId: store.chatId)
                     } else {
                         waitingForFile = true
-                        store.requestFileDownload(fileId: fileId, priority: 2)
+                        store.requestFileDownload(fileId: note.voiceFileId, priority: 2)
                     }
                 } label: {
                     Text("Aa")
@@ -199,7 +216,7 @@ struct TranscriptView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Transcribe")
-                if let error = speech.transcripts[fileId]?.error {
+                if let error = speech.transcripts[key]?.error {
                     Text(error).font(.system(size: 9)).foregroundStyle(.red).lineLimit(2)
                 }
             }

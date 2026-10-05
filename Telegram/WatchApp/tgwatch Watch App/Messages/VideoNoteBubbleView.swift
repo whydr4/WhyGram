@@ -59,8 +59,6 @@ struct VideoNoteBubbleView: View {
                     store.cancelFileDownload(fileId: id)
                 }
             }
-            TranscriptView(fileId: note.videoFileId, path: note.videoLocalPath, kind: .videoNote, secondary: .secondary)
-                .frame(maxWidth: diameter, alignment: isOutgoing ? .trailing : .leading)
         }
     }
 

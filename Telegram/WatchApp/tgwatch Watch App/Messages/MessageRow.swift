@@ -319,7 +319,9 @@ func voiceNoteVisual(for content: MessageContent, fileLocals: [Int: File]) -> Vo
         mimeType: m.voiceNote.mimeType,
         waveform: m.voiceNote.waveform,
         caption: m.caption.text,
-        localPath: localPath
+        localPath: localPath,
+        uniqueId: voiceFile.remote.uniqueId,
+        isListened: m.isListened
     )
 }
 

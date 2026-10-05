@@ -25,7 +25,7 @@ struct SettingsView: View {
             } header: {
                 Text("Voice transcription")
             } footer: {
-                Text("Whisper runs on the watch: voice and video messages are transcribed without Premium and without sending audio anywhere. Automatic transcription works through new messages in an open chat one by one.")
+                Text("Whisper runs on the watch: voice messages are transcribed without Premium and without sending audio anywhere. Automatic transcription takes incoming voice messages you haven't listened to, up to \(SpeechRecognizer.autoMaxDuration) seconds, one by one while the chat is open.")
             }
 
             Section {
@@ -95,8 +95,9 @@ struct SettingsView: View {
     }
 }
 
-/// Settings ▸ Diagnostics: try recognition on the newest voice message and see how
-/// long the model took and how much memory the app uses.
+/// Settings ▸ Diagnostics: try recognition on the newest voice message, compare the
+/// decoder on the CPU and the Neural Engine, and see how long the model took and how
+/// much memory the app uses.
 private struct SpeechDiagnosticsView: View {
     @Environment(TDClient.self) private var client
     @State private var speech = SpeechRecognizer.shared
@@ -105,14 +106,9 @@ private struct SpeechDiagnosticsView: View {
         List {
             Section("Try it") {
                 Button {
-                    speech.testOnLatestNote(video: false, using: client)
+                    speech.testOnLatestNote(using: client)
                 } label: {
                     Label("Latest voice message", systemImage: "waveform")
-                }
-                Button {
-                    speech.testOnLatestNote(video: true, using: client)
-                } label: {
-                    Label("Latest video message", systemImage: "video.circle")
                 }
                 if speech.isTesting {
                     HStack {
@@ -125,6 +121,11 @@ private struct SpeechDiagnosticsView: View {
                 }
             }
             .disabled(speech.isTesting || !speech.isDownloaded)
+            Section {
+                Toggle("Decoder on CPU", isOn: $speech.decoderOnCPU)
+            } footer: {
+                Text("Runs the text decoder on the CPU instead of the Neural Engine. Compare the recognize time below.")
+            }
             Section("Measurements") {
                 ForEach(speech.stats, id: \.self) { line in
                     Text(line).font(.caption2)

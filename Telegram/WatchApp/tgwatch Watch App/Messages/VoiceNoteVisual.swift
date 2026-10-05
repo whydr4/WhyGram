@@ -16,6 +16,11 @@ struct VoiceNoteVisual: Identifiable, Equatable, Hashable {
     let caption: String
     /// Filesystem path of the voice file once downloaded; nil otherwise.
     let localPath: String?
+    /// The voice file's `remote.uniqueId`: the same across TDLib databases and
+    /// re-logins, unlike the file id. Empty for a draft or a note still uploading.
+    var uniqueId: String = ""
+    /// `MessageVoiceNote.isListened`; outgoing notes count as listened.
+    var isListened: Bool = true
 }
 
 extension VoiceNoteVisual {

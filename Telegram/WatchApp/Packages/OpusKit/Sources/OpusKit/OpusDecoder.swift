@@ -24,6 +24,54 @@ public struct DecodedOpus: @unchecked Sendable {
 public enum OpusDecoder {
 
     public static func decodePCM(url: URL) throws -> DecodedOpus {
+        let decoded = try decodeFile(url: url, sampleRate: 48000)
+        let left = decoded.left, right = decoded.right
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48000,
+            channels: AVAudioChannelCount(decoded.channelCount),
+            interleaved: false
+        ),
+        let pcm = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(left.count)
+        ) else {
+            throw OpusDecoderError.decode("AVAudioPCMBuffer alloc failed")
+        }
+        pcm.frameLength = AVAudioFrameCount(left.count)
+        guard let channels = pcm.floatChannelData else {
+            throw OpusDecoderError.decode("pcm.floatChannelData nil")
+        }
+        _ = left.withUnsafeBufferPointer { src in
+            memcpy(channels[0], src.baseAddress, left.count * MemoryLayout<Float>.size)
+        }
+        if decoded.channelCount == 2 {
+            _ = right.withUnsafeBufferPointer { src in
+                memcpy(channels[1], src.baseAddress, right.count * MemoryLayout<Float>.size)
+            }
+        }
+        return DecodedOpus(pcm: pcm)
+    }
+
+    /// Mono samples at `sampleRate` (8, 12, 16, 24 or 48 kHz). libopus decodes
+    /// straight to that rate, so a speech recognizer wanting 16 kHz needs no
+    /// resampling pass; stereo is averaged down to mono.
+    public static func decodeMonoSamples(url: URL, sampleRate: Int32) throws -> [Float] {
+        let decoded = try decodeFile(url: url, sampleRate: sampleRate)
+        guard decoded.channelCount == 2 else { return decoded.left }
+        let count = min(decoded.left.count, decoded.right.count)
+        return (0..<count).map { (decoded.left[$0] + decoded.right[$0]) * 0.5 }
+    }
+
+    // MARK: - Implementation
+
+    private struct DecodedChannels {
+        var left: [Float]
+        var right: [Float]
+        var channelCount: Int32
+    }
+
+    private static func decodeFile(url: URL, sampleRate: Int32) throws -> DecodedChannels {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw OpusDecoderError.fileNotFound
         }
@@ -37,20 +85,19 @@ public enum OpusDecoder {
               data[2] == 0x67, data[3] == 0x53 else {
             throw OpusDecoderError.notOggOpus
         }
-        return try data.withUnsafeBytes { raw -> DecodedOpus in
+        return try data.withUnsafeBytes { raw -> DecodedChannels in
             guard let base = raw.baseAddress else {
                 throw OpusDecoderError.notOggOpus
             }
-            return try decodeFromMappedBytes(base, count: raw.count)
+            return try decodeFromMappedBytes(base, count: raw.count, sampleRate: sampleRate)
         }
     }
 
-    // MARK: - Implementation
-
     private static func decodeFromMappedBytes(
         _ base: UnsafeRawPointer,
-        count: Int
-    ) throws -> DecodedOpus {
+        count: Int,
+        sampleRate: Int32
+    ) throws -> DecodedChannels {
         var sync = ogg_sync_state()
         ogg_sync_init(&sync)
         defer { ogg_sync_clear(&sync) }
@@ -72,15 +119,13 @@ public enum OpusDecoder {
         defer { if let d = decoder { opus_decoder_destroy(d) } }
 
         var channelCount: Int32 = 0
-        let sampleRate: Int32 = 48000
         var preSkip: Int32 = 0
 
         // Output PCM accumulators (deinterleaved). Sized generously; will grow
         // if needed. 30 s of voice at 48 kHz is ~1.44 M samples — fine in memory.
         var leftSamples: [Float] = []
         var rightSamples: [Float] = []
-        leftSamples.reserveCapacity(48_000 * 30)
-        rightSamples.reserveCapacity(48_000 * 30)
+        leftSamples.reserveCapacity(Int(sampleRate) * 30)
 
         // Per-packet decode buffer; sized for 120 ms × 48 kHz × stereo.
         let maxFramesPerPacket = 5760
@@ -177,38 +222,13 @@ public enum OpusDecoder {
             throw OpusDecoderError.notOggOpus
         }
 
-        // Drop pre-skip frames per Opus spec.
-        let skip = min(Int(preSkip), leftSamples.count)
+        // Drop pre-skip frames per Opus spec (counted at 48 kHz).
+        let skip = min(Int(preSkip) * Int(sampleRate) / 48000, leftSamples.count)
         leftSamples.removeFirst(skip)
         if channelCount == 2 {
             rightSamples.removeFirst(min(skip, rightSamples.count))
         }
 
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Double(sampleRate),
-            channels: AVAudioChannelCount(channelCount),
-            interleaved: false
-        ),
-        let pcm = AVAudioPCMBuffer(
-            pcmFormat: format,
-            frameCapacity: AVAudioFrameCount(leftSamples.count)
-        ) else {
-            throw OpusDecoderError.decode("AVAudioPCMBuffer alloc failed")
-        }
-        pcm.frameLength = AVAudioFrameCount(leftSamples.count)
-        guard let channels = pcm.floatChannelData else {
-            throw OpusDecoderError.decode("pcm.floatChannelData nil")
-        }
-        _ = leftSamples.withUnsafeBufferPointer { src in
-            memcpy(channels[0], src.baseAddress, leftSamples.count * MemoryLayout<Float>.size)
-        }
-        if channelCount == 2 {
-            _ = rightSamples.withUnsafeBufferPointer { src in
-                memcpy(channels[1], src.baseAddress, rightSamples.count * MemoryLayout<Float>.size)
-            }
-        }
-
-        return DecodedOpus(pcm: pcm)
+        return DecodedChannels(left: leftSamples, right: rightSamples, channelCount: channelCount)
     }
 }
