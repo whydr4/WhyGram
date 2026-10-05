@@ -194,8 +194,9 @@ struct TranscriptView: View {
                 .transition(.opacity)
         } else if speech.inProgress.contains(key) || waitingForFile {
             HStack(spacing: 4) {
-                ProgressView().controlSize(.mini)
-                Text("Recognizing…").font(.caption2).foregroundStyle(secondary)
+                // Unsized, the watch's spinner takes the whole row and squeezes the label.
+                ProgressView().controlSize(.mini).frame(width: 14, height: 14)
+                Text("Recognizing…").font(.caption2).foregroundStyle(secondary).lineLimit(1)
             }
             .transition(.opacity)
         } else if speech.isDownloaded {

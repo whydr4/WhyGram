@@ -31,6 +31,12 @@ struct SettingsView: View {
             Section {
                 NavigationLink("Diagnostics") { SpeechDiagnosticsView() }
             }
+
+            #if DEBUG
+            Section("Developer") {
+                NavigationLink("UI Gallery") { UIGalleryView() }
+            }
+            #endif
         }
         .navigationTitle("Settings")
         .confirmationDialog("Delete the \(speech.model.title) model?", isPresented: $confirmDelete) {

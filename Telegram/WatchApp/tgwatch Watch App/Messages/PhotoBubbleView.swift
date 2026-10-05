@@ -20,8 +20,6 @@ struct PhotoBubbleView: View {
     @Environment(ChatHistoryStore.self) private var store
     @Environment(\.bubbleMetrics) private var metrics
 
-    private var maxWidthPt: CGFloat { metrics.photoMaxWidth }
-    private var maxHeightPt: CGFloat { metrics.photoMaxHeight }
     private var style: BubbleStyle { .resolve(isOutgoing: isOutgoing) }
 
     // A caption or reply header gives the bubble chrome; the image still spans the chrome's
@@ -66,6 +64,7 @@ struct PhotoBubbleView: View {
                     .foregroundStyle(style.content)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
+                    .padding(.bottom, 4)
             }
         }
         .frame(width: displaySize.width, alignment: .leading)
@@ -84,21 +83,8 @@ struct PhotoBubbleView: View {
         }
     }
 
-    /// Aspect-fits the chosen `PhotoSize` (in pixels) into a `maxWidthPt × maxHeightPt`
-    /// box (in logical pts). Both dims are clamped, so a tall photo doesn't dominate.
-    private var displaySize: CGSize {
-        guard photo.width > 0, photo.height > 0 else {
-            return CGSize(width: maxWidthPt, height: maxWidthPt)
-        }
-        let aspect = CGFloat(photo.height) / CGFloat(photo.width)
-        var w = maxWidthPt
-        var h = w * aspect
-        if h > maxHeightPt {
-            h = maxHeightPt
-            w = h / aspect
-        }
-        return CGSize(width: w, height: h)
-    }
+    /// The chosen `PhotoSize` (in pixels) fitted into the bubble's image box.
+    private var displaySize: CGSize { metrics.mediaSize(width: photo.width, height: photo.height) }
 }
 
 #if DEBUG

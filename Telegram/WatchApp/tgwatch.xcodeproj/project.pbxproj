@@ -76,6 +76,7 @@
 		D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E03 /* DebugTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E09 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */; };
+		D1CA0E1A6E5B4C2F9A7B3E0B /* UIGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E0C /* UIGalleryView.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E07 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E05 /* MessageActionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E06 /* MessageActionsView.swift */; };
 		A0899809BBC92D1563AC4160 /* ReplyBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7584BF25A84BAD24AB992A79 /* ReplyBar.swift */; };
@@ -179,6 +180,7 @@
 		D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedImageCache.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTrace.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D1CA0E1A6E5B4C2F9A7B3E0C /* UIGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIGalleryView.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E06 /* MessageActionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsView.swift; sourceTree = "<group>"; };
 		7584BF25A84BAD24AB992A79 /* ReplyBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyBar.swift; sourceTree = "<group>"; };
@@ -384,6 +386,7 @@
 				D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */,
+				D1CA0E1A6E5B4C2F9A7B3E0C /* UIGalleryView.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E06 /* MessageActionsView.swift */,
 				7584BF25A84BAD24AB992A79 /* ReplyBar.swift */,
@@ -600,6 +603,7 @@
 				D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E03 /* DebugTrace.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E09 /* SettingsView.swift in Sources */,
+				D1CA0E1A6E5B4C2F9A7B3E0B /* UIGalleryView.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E07 /* SpeechRecognizer.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E05 /* MessageActionsView.swift in Sources */,
 				A0899809BBC92D1563AC4160 /* ReplyBar.swift in Sources */,

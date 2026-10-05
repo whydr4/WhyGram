@@ -30,6 +30,24 @@ struct BubbleMetrics: Equatable {
     /// dominate a short 40mm screen — no need to read screen height.
     var photoMaxHeight: CGFloat { photoMaxWidth * (200.0 / 180.0) }
 
+    /// Aspect-fits a photo / video of `width × height` pixels into the
+    /// `photoMaxWidth × photoMaxHeight` box. Extreme shapes (a long screenshot, a
+    /// panorama) are held to at least half the box width and 64pt high and cropped by
+    /// the caller's fill, so they don't shrink to a sliver the play button overflows.
+    func mediaSize(width: Int, height: Int) -> CGSize {
+        guard width > 0, height > 0 else {
+            return CGSize(width: photoMaxWidth, height: photoMaxWidth)
+        }
+        let aspect = CGFloat(height) / CGFloat(width)
+        var w = photoMaxWidth
+        var h = w * aspect
+        if h > photoMaxHeight {
+            h = photoMaxHeight
+            w = h / aspect
+        }
+        return CGSize(width: max(w, photoMaxWidth / 2), height: max(h, 64))
+    }
+
     /// Voice / audio / poll chrome max width.
     var bubbleMaxWidth: CGFloat { contentWidth }
 

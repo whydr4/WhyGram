@@ -22,6 +22,7 @@ struct StickerBubbleView: View {
             if let name = senderName, !isOutgoing {
                 Text(name)
                     .font(.caption2)
+                    .lineLimit(1)
                     .foregroundStyle(senderColorIndex.map { avatarPalette[$0] } ?? .secondary)
                     .padding(.horizontal, 4)
             }

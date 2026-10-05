@@ -36,18 +36,33 @@ struct TgwatchApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if let client = manager.activeClient {
-                ContentView()
-                    .environment(client)
-                    .environment(manager)
-                    .id(manager.activeAccountId)
-            } else if !isUnderXCTest {
-                // Under XCTest the scene is not test-driven; suppress
-                // AccountBootstrapView so its .task doesn't call
-                // ensureAccountExists() → factory.make() via NoopTDClientFactory.
-                AccountBootstrapView()
-                    .environment(manager)
+            #if DEBUG
+            if let section = ProcessInfo.processInfo.environment["TGWATCH_UI_GALLERY"] {
+                // Opens straight into Settings ▸ UI Gallery, at the section named by
+                // the variable (`1` = from the top), for screenshot passes.
+                NavigationStack { UIGalleryView(startSection: section) }
+            } else {
+                mainScene
             }
+            #else
+            mainScene
+            #endif
+        }
+    }
+
+    @ViewBuilder
+    private var mainScene: some View {
+        if let client = manager.activeClient {
+            ContentView()
+                .environment(client)
+                .environment(manager)
+                .id(manager.activeAccountId)
+        } else if !isUnderXCTest {
+            // Under XCTest the scene is not test-driven; suppress
+            // AccountBootstrapView so its .task doesn't call
+            // ensureAccountExists() → factory.make() via NoopTDClientFactory.
+            AccountBootstrapView()
+                .environment(manager)
         }
     }
 

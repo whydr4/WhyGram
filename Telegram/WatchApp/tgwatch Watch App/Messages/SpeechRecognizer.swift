@@ -711,3 +711,15 @@ private enum ModelFetcher {
         guard code == 200 else { throw FetchError.http(code, file) }
     }
 }
+
+#if DEBUG
+extension SpeechRecognizer {
+    /// UI gallery: puts a made-up voice note into a recognition state. In memory only,
+    /// never saved with the real transcripts.
+    func setGalleryState(key: String, text: String? = nil, partial: String? = nil, error: String? = nil, inProgress: Bool = false) {
+        transcripts[key] = (text != nil || error != nil) ? Transcript(text: text, error: error) : nil
+        partials[key] = partial
+        if inProgress { self.inProgress.insert(key) } else { self.inProgress.remove(key) }
+    }
+}
+#endif

@@ -20,6 +20,7 @@ struct MessageBubbleView: View {
                 if let name = bubble.senderName, !bubble.isOutgoing, bubble.sticker == nil {
                     Text(name)
                         .font(.caption2)
+                        .lineLimit(1)
                         .foregroundStyle(bubble.senderColorIndex.map { avatarPalette[$0] } ?? .secondary)
                         .padding(.leading, 8)
                 }

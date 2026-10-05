@@ -22,8 +22,6 @@ struct VideoBubbleView: View {
     @Environment(ChatHistoryStore.self) private var store
     @Environment(\.bubbleMetrics) private var metrics
 
-    private var maxWidthPt: CGFloat { metrics.photoMaxWidth }
-    private var maxHeightPt: CGFloat { metrics.photoMaxHeight }
     private var style: BubbleStyle { .resolve(isOutgoing: isOutgoing) }
 
     // A caption or reply header gives the bubble chrome; the video still spans the chrome's
@@ -66,6 +64,7 @@ struct VideoBubbleView: View {
                     .foregroundStyle(style.content)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
+                    .padding(.bottom, 4)
             }
         }
         .frame(width: displaySize.width, alignment: .leading)
@@ -109,20 +108,9 @@ struct VideoBubbleView: View {
             .shadow(radius: 2)
     }
 
-    /// Aspect-fits the chosen preview pixel size into a `maxWidthPt × maxHeightPt`
-    /// box (in logical pts). Both dims are clamped, so a tall video doesn't dominate.
+    /// The chosen preview pixel size fitted into the bubble's image box.
     private var displaySize: CGSize {
-        guard video.preview.previewWidth > 0, video.preview.previewHeight > 0 else {
-            return CGSize(width: maxWidthPt, height: maxWidthPt)
-        }
-        let aspect = CGFloat(video.preview.previewHeight) / CGFloat(video.preview.previewWidth)
-        var w = maxWidthPt
-        var h = w * aspect
-        if h > maxHeightPt {
-            h = maxHeightPt
-            w = h / aspect
-        }
-        return CGSize(width: w, height: h)
+        metrics.mediaSize(width: video.preview.previewWidth, height: video.preview.previewHeight)
     }
 }
 
