@@ -60,12 +60,12 @@ struct ReplyHeaderView: View {
                 .fill(barColor)
                 .frame(width: 2)
 
-            if let data = header.minithumbnail, let img = DecodedImageCache.image(data: data) {
+            if let data = header.minithumbnail,
+               let img = DecodedImageCache.blurredImage(data: data, displayWidth: 22, radius: 1) {
                 Image(uiImage: img)
                     .resizable()
                     .scaledToFill()
                     .frame(width: 22, height: 22)
-                    .blur(radius: 1)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 

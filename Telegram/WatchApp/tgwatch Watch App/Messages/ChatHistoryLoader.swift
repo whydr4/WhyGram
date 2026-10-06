@@ -130,51 +130,7 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
                 continuation.resume(throwing: error)
             }
         }
-        return try decodeMessagesLeniently(data, chatId: chatId)
-    }
-
-    /// Decodes a `getChatHistory` response one message at a time, skipping any
-    /// message TDLibKit can't model. A TDLib `error` response or a malformed body
-    /// is thrown rather than collapsed to `[]`: callers treat an empty page as
-    /// "no more history", so swallowing a transient failure (e.g. a timeout while
-    /// the watch moves between the phone proxy and Wi-Fi/LTE) would permanently
-    /// mark the window as exhausted and bypass the store's retry handling.
-    private func decodeMessagesLeniently(_ data: Data, chatId: Int64) throws -> [Message] {
-        let logger = Logger(subsystem: "org.telegram.TelegramWatch", category: "chathistory")
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — response was not JSON object")
-            throw TDError(code: 500, message: "Malformed getChatHistory response")
-        }
-        if let type = json["@type"] as? String, type == "error" {
-            logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — TDLib error response: \(String(describing: json), privacy: .public)")
-            throw TDError(
-                code: json["code"] as? Int ?? 500,
-                message: json["message"] as? String ?? "getChatHistory failed"
-            )
-        }
-        guard let rawMessages = json["messages"] as? [Any] else {
-            logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — response has no messages array")
-            throw TDError(code: 500, message: "Malformed getChatHistory response")
-        }
-        var decoded: [Message] = []
-        decoded.reserveCapacity(rawMessages.count)
-        for (idx, entry) in rawMessages.enumerated() {
-            // TDLib documents that `messages` entries may be null; skip them.
-            guard let raw = entry as? [String: Any] else { continue }
-            // Re-serialize each message dict to Data so TDLibKit's decoder can
-            // consume it the same way it would the full Messages response.
-            guard let perMessageData = try? JSONSerialization.data(withJSONObject: raw) else {
-                logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — re-serialize failed at index=\(idx, privacy: .public)")
-                continue
-            }
-            do {
-                let m = try client.decoder.decode(Message.self, from: perMessageData)
-                decoded.append(m)
-            } catch {
-                logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — skipping message index=\(idx, privacy: .public) due to decode error: \(String(describing: error), privacy: .public)")
-            }
-        }
-        return decoded
+        return try decodeHistoryPage(data, decoder: client.decoder, chatId: chatId)
     }
 
     func downloadFile(fileId: Int, priority: Int) async throws -> File {
@@ -323,5 +279,88 @@ struct TDLibChatHistoryLoader: ChatHistoryLoader {
             replyTo: nil,
             topicId: nil
         )
+    }
+}
+
+/// Decodes a `getChatHistory` response, skipping any message TDLibKit can't model
+/// (TDLib evolves faster than the pinned TDShim). A TDLib `error` response or a
+/// malformed body is thrown rather than collapsed to `[]`: callers treat an empty page
+/// as "no more history", so swallowing a transient failure (e.g. a timeout while the
+/// watch moves between the phone proxy and Wi-Fi/LTE) would permanently mark the
+/// window as exhausted and bypass the store's retry handling.
+///
+/// One decoding pass: each message decodes in place and a failure only drops that
+/// one. (It used to parse the page with JSONSerialization, re-serialize every message
+/// and decode each again: three passes over the page on the watch's CPU.)
+func decodeHistoryPage(_ data: Data, decoder: JSONDecoder, chatId: Int64) throws -> [Message] {
+    #if DEBUG
+    let benchStart = PerfBench.shared?.now()
+    #endif
+    let logger = Logger(subsystem: "org.telegram.TelegramWatch", category: "chathistory")
+    let page: HistoryPage
+    do {
+        page = try decoder.decode(HistoryPage.self, from: data)
+    } catch {
+        logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — malformed response: \(String(describing: error), privacy: .public)")
+        throw TDError(code: 500, message: "Malformed getChatHistory response")
+    }
+    if page.type == "error" {
+        logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — TDLib error \(page.code ?? 0, privacy: .public): \(page.message ?? "", privacy: .public)")
+        throw TDError(code: page.code ?? 500, message: page.message ?? "getChatHistory failed")
+    }
+    guard let entries = page.messages else {
+        logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — response has no messages array")
+        throw TDError(code: 500, message: "Malformed getChatHistory response")
+    }
+    var decoded: [Message] = []
+    decoded.reserveCapacity(entries.count)
+    for (idx, entry) in entries.enumerated() {
+        switch entry {
+        case .message(let m):
+            decoded.append(m)
+        case .null:
+            // TDLib documents that `messages` entries may be null; skip them.
+            break
+        case .undecodable(let error):
+            logger.warning("getChatHistory chatId=\(chatId, privacy: .public) — skipping message index=\(idx, privacy: .public) due to decode error: \(String(describing: error), privacy: .public)")
+        }
+    }
+    #if DEBUG
+    if let bench = PerfBench.shared, let benchStart {
+        bench.decoded(ms: bench.now() - benchStart, messages: decoded.count)
+    }
+    #endif
+    return decoded
+}
+
+/// A `getChatHistory` response (`messages`), or a TDLib `error`.
+private struct HistoryPage: Decodable {
+    let type: String
+    let messages: [Entry]?
+    let code: Int?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type = "@type"
+        case messages, code, message
+    }
+
+    /// One `messages` element, decoded on its own so a bad one doesn't fail the page.
+    enum Entry: Decodable {
+        case message(Message)
+        case null
+        case undecodable(Error)
+
+        init(from decoder: Decoder) throws {
+            if let single = try? decoder.singleValueContainer(), single.decodeNil() {
+                self = .null
+                return
+            }
+            do {
+                self = .message(try Message(from: decoder))
+            } catch {
+                self = .undecodable(error)
+            }
+        }
     }
 }

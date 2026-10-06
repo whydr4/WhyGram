@@ -30,13 +30,6 @@ struct PhotoBubbleView: View {
         Group {
             if hasChrome { chromeBubble } else { bareImage }
         }
-        .onScrollVisibilityChange(threshold: 0.01) { visible in
-            if visible {
-                store.requestFileDownload(fileId: photo.fileId)
-            } else {
-                store.cancelFileDownload(fileId: photo.fileId)
-            }
-        }
     }
 
     private var bareImage: some View {
@@ -75,8 +68,8 @@ struct PhotoBubbleView: View {
     @ViewBuilder
     private var imageView: some View {
         DecodedFileImage(path: photo.localPath, maxPixelSize: DecodeSize.bubble) {
-            if let data = photo.minithumbnail, let img = DecodedImageCache.image(data: data) {
-                Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
+            if let data = photo.minithumbnail, let img = DecodedImageCache.blurredImage(data: data, displayWidth: displaySize.width, radius: 2) {
+                Image(uiImage: img).resizable().scaledToFill()
             } else {
                 Color.gray.opacity(0.3)
             }

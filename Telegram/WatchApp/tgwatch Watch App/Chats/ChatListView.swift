@@ -46,6 +46,17 @@ struct ChatListView: View {
             }
         }
         .accessibilityIdentifier("chatListView")
+        #if DEBUG
+        // Perf bench `real`: opens the chat named by TGWATCH_PERF_CHAT (id) or
+        // TGWATCH_PERF_CHAT_TITLE (part of the title) once it's in the list.
+        .task(id: store.chats.count) {
+            guard let bench = PerfBench.shared, bench.config.isReal, bench.phase == "idle",
+                  opener.target == nil,
+                  let row = store.chats.first(where: { bench.config.matches($0) }) else { return }
+            bench.note("opening chat \(row.id)")
+            opener.open(row, makeStore: makeHistoryStore)
+        }
+        #endif
     }
 
     @ViewBuilder

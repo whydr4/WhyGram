@@ -51,22 +51,14 @@ struct VideoNoteBubbleView: View {
             }
             .contentShape(Circle())
             .onTapGesture { onTap() }
-            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                guard let id = note.thumbFileId else { return }
-                if visible {
-                    store.requestFileDownload(fileId: id)
-                } else {
-                    store.cancelFileDownload(fileId: id)
-                }
-            }
         }
     }
 
     @ViewBuilder
     private var imageView: some View {
         DecodedFileImage(path: note.thumbLocalPath, maxPixelSize: DecodeSize.bubble) {
-            if let data = note.minithumbnail, let img = DecodedImageCache.image(data: data) {
-                Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
+            if let data = note.minithumbnail, let img = DecodedImageCache.blurredImage(data: data, displayWidth: diameter, radius: 2) {
+                Image(uiImage: img).resizable().scaledToFill()
             } else {
                 Color.gray.opacity(0.3)
             }

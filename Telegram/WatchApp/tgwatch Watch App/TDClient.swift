@@ -198,7 +198,37 @@ final class TDClient {
 
         qrLinkPublisher.clear()
         let logger = self.logger
-        let client = manager.createClient { [weak self] data, callbackClient in
+        let batcher = UpdateBatcher { [weak self] items in
+            #if DEBUG
+            let bench = PerfBench.shared
+            let handleStart = bench?.now() ?? 0
+            defer { bench.map { $0.updateHandled(mainMs: $0.now() - handleStart) } }
+            #endif
+            guard let self else { return }
+            for item in items {
+                switch item {
+                case .update(let update): self.handle(update)
+                case .fork(let fork): self.handle(fork)
+                }
+            }
+        }
+        let client = manager.createClient { data, callbackClient in
+            #if DEBUG
+            let bench = PerfBench.shared
+            let decodeStart = bench?.now() ?? 0
+            defer { bench.map { $0.update(PerfBench.jsonType(data), decodeMs: $0.now() - decodeStart) } }
+            #endif
+            // The fork's own updates aren't in the generated `Update`; route by `@type` so
+            // each update is decoded once (they used to be decoded as `Update` first, and
+            // every update `Update` doesn't model was then decoded a second time).
+            let type = TDJSONEnvelope.type(of: data)
+            if let type, Self.ignoredUpdates.contains(type) { return }
+            if let type, ForkUpdate.handles(type: type) {
+                guard let fork = try? callbackClient.decoder.decode(ForkUpdate.self, from: data) else { return }
+                if case .other = fork { return }
+                batcher.append(.fork(fork))
+                return
+            }
             let update: Update
             do {
                 update = try callbackClient.decoder.decode(Update.self, from: data)
@@ -206,19 +236,8 @@ final class TDClient {
                 logger.warning("update decode failed: \(error.localizedDescription, privacy: .public)")
                 return
             }
-            // Updates outside the generated subset come through as .unsupported; the
-            // fork's own ones decode from the same data.
-            if case .unsupported = update {
-                guard let fork = try? callbackClient.decoder.decode(ForkUpdate.self, from: data) else { return }
-                if case .other = fork { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.handle(fork)
-                }
-                return
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.handle(update)
-            }
+            if case .unsupported = update { return }
+            batcher.append(.update(update))
         }
         self.client = client
 
@@ -232,6 +251,33 @@ final class TDClient {
             }
         }
     }
+
+    /// Frequent updates nothing in the app handles (every handler switches over the
+    /// cases it uses and ignores the rest), dropped before decoding: TDLib sends hundreds
+    /// of them while syncing at launch. Remove a type from here before handling it.
+    nonisolated static let ignoredUpdates: Set<String> = [
+        "updateUserFullInfo", "updateSupergroupFullInfo", "updateBasicGroupFullInfo",
+        "updateOption", "updateUserStatus", "updateUnreadMessageCount", "updateUnreadChatCount",
+        "updateSupergroup", "updateBasicGroup", "updateChatAction", "updateChatOnlineMemberCount",
+        "updateChatActiveStories", "updateStoryListChatCount", "updateChatAvailableReactions",
+        "updateChatAccentColors", "updateChatEmojiStatus", "updateChatBackground", "updateChatTheme",
+        "updateChatViewAsTopics", "updateChatBlockList", "updateChatHasScheduledMessages",
+        "updateChatUnreadReactionCount", "updateMessageUnreadReactions", "updateChatVideoChat",
+        "updateChatPendingJoinRequests", "updateChatMessageAutoDeleteTime", "updateChatActionBar",
+        "updateChatBusinessBotManageBar", "updateChatIsTranslatable", "updateChatHasProtectedContent",
+        "updateChatDefaultDisableNotification", "updateChatReplyMarkup", "updateChatMessageSender",
+        "updateScopeNotificationSettings", "updateReactionNotificationSettings",
+        "updateAnimationSearchParameters", "updateDefaultReactionType", "updateDefaultPaidReactionType",
+        "updateAvailableMessageEffects", "updateActiveEmojiReactions", "updateAttachmentMenuBots",
+        "updateDiceEmojis", "updateSuggestedActions", "updateFileDownloads", "updateFileAddedToDownloads",
+        "updateFileDownload", "updateStoryStealthMode", "updateUnconfirmedSession",
+        "updateSpeechRecognitionTrial", "updateContactCloseBirthdays", "updateAccentColors",
+        "updateProfileAccentColors", "updateOwnedStarCount", "updateOwnedTonCount",
+        "updateSavedMessagesTags", "updateSavedMessagesTopic", "updateSavedMessagesTopicCount",
+        "updateQuickReplyShortcuts", "updateForumTopicInfo", "updateConnectionState",
+        "updateHavePendingNotifications", "updateMessageIsPinned", "updateMessageEdited",
+        "updateMessageLiveLocationViewed",
+    ]
 
     private func handle(_ update: ForkUpdate) {
         activeHistory?.handle(update)
@@ -461,5 +507,38 @@ final class TDClient {
         let dir = base.appendingPathComponent(accountId.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+}
+
+/// Hands decoded updates to the main thread in batches: everything decoded while the
+/// main thread is busy goes over in one block, in order, instead of one block per
+/// update (TDLib sends bursts of hundreds while syncing).
+private final class UpdateBatcher: @unchecked Sendable {
+    enum Item {
+        case update(Update)
+        case fork(ForkUpdate)
+    }
+
+    private let lock = NSLock()
+    private var pending: [Item] = []
+    private let deliver: @MainActor ([Item]) -> Void
+
+    init(deliver: @escaping @MainActor ([Item]) -> Void) {
+        self.deliver = deliver
+    }
+
+    func append(_ item: Item) {
+        lock.lock()
+        pending.append(item)
+        let first = pending.count == 1
+        lock.unlock()
+        guard first else { return }
+        DispatchQueue.main.async { [self] in
+            lock.lock()
+            let items = pending
+            pending.removeAll(keepingCapacity: true)
+            lock.unlock()
+            MainActor.assumeIsolated { deliver(items) }
+        }
     }
 }

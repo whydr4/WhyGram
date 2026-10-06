@@ -31,13 +31,6 @@ struct VoiceNoteBubbleView: View {
 
     var body: some View {
         chrome
-            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                if visible {
-                    store.requestFileDownload(fileId: note.voiceFileId)
-                } else {
-                    store.cancelFileDownload(fileId: note.voiceFileId)
-                }
-            }
     }
 
     private var chrome: some View {
@@ -206,7 +199,7 @@ struct TranscriptView: View {
                         speech.transcribe(key: key, path: path, chatId: store.chatId)
                     } else {
                         waitingForFile = true
-                        store.requestFileDownload(fileId: note.voiceFileId, priority: 2)
+                        store.requestFileDownload(fileId: note.voiceFileId, priority: ChatHistoryStore.userPriority)
                     }
                 } label: {
                     Text("Aa")

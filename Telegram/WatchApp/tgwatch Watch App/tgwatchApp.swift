@@ -22,22 +22,36 @@ struct TgwatchApp: App {
         if isUnderXCTest {
             factory = NoopTDClientFactory()
         } else {
-            factory = LiveTDClientFactory(manager: TDLibClientManager())
+            factory = LiveTDClientFactory(manager: TgwatchApp.tdlibManager)
         }
         let mgr = AccountManager(
             registry: .defaultProduction(),
             factory: factory
         )
-        if !isUnderXCTest {
+        #if DEBUG
+        // The synthetic perf bench runs without an account (no TDLib traffic).
+        let runsAccount = !isUnderXCTest && (PerfBench.shared?.config.isReal ?? true)
+        #else
+        let runsAccount = !isUnderXCTest
+        #endif
+        if runsAccount {
             mgr.bootstrap()
         }
         _manager = State(initialValue: mgr)
     }
 
+    /// The process's only TDLib client manager: it runs `td_receive` in a loop, which
+    /// TDLib allows on one thread only (a second manager aborts the app).
+    static let tdlibManager = TDLibClientManager()
+
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if let section = ProcessInfo.processInfo.environment["TGWATCH_UI_GALLERY"] {
+            if let bench = PerfBench.shared, !bench.config.isReal {
+                // Perf bench on a made-up chat (perf-sim.sh); `real` runs in the app.
+                PerfBenchRootView()
+                    .environment(manager)   // LoadingView's account switcher reads it
+            } else if let section = ProcessInfo.processInfo.environment["TGWATCH_UI_GALLERY"] {
                 // Opens straight into Settings ▸ UI Gallery, at the section named by
                 // the variable (`1` = from the top), for screenshot passes.
                 NavigationStack { UIGalleryView(startSection: section) }

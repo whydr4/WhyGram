@@ -115,6 +115,7 @@ final class ChatHistoryStore {
             }
             try await loadInitialWindow()
             loadState = .loaded
+            prefetchOlder()
         } catch is CancellationError {
             return
         } catch {
@@ -139,6 +140,7 @@ final class ChatHistoryStore {
         do {
             try await loadInitialWindow()
             loadState = .loaded
+            prefetchOlder()
         } catch is CancellationError {
             return
         } catch {
@@ -185,9 +187,17 @@ final class ChatHistoryStore {
         let maxIterations = 10
         var iter = 0
         if case .tail = window.anchor, window.cache.isEmpty, let tailId = chatTailIdAtOpen {
+            #if DEBUG
+            let localStart = PerfBench.shared?.now()
+            #endif
             let local = (try? await loader.loadLocalHistory(
                 chatId: chatId, fromMessageId: 0, offset: 0, limit: targetCount
             )) ?? []
+            #if DEBUG
+            if let bench = PerfBench.shared, let localStart {
+                bench.pageFetched("local", fetchMs: bench.now() - localStart, count: local.count)
+            }
+            #endif
             logger.info("loadInitialWindow local returned=\(local.count, privacy: .public)")
             if let localHighest = local.map(\.id).max(), localHighest >= tailId {
                 for m in local { primeFiles(from: m.content) }
@@ -216,9 +226,17 @@ final class ChatHistoryStore {
                 }
             }
             let limit = max(1, targetCount - window.cache.count)
+            #if DEBUG
+            let fetchStart = PerfBench.shared?.now()
+            #endif
             let messages = try await loader.loadHistory(
                 chatId: chatId, fromMessageId: from, offset: offset, limit: limit
             )
+            #if DEBUG
+            if let bench = PerfBench.shared, let fetchStart {
+                bench.pageFetched("initial", fetchMs: bench.now() - fetchStart, count: messages.count)
+            }
+            #endif
             logger.info("loadInitialWindow iter=\(iter, privacy: .public) returned=\(messages.count, privacy: .public)")
             if messages.isEmpty {
                 // Empty terminator. For a `.tail`-anchored initial fill, an empty
@@ -240,6 +258,9 @@ final class ChatHistoryStore {
     }
 
     func stop() async {
+        dropOlderPrefetch()
+        for task in pendingRowDownloads.values { task.cancel() }
+        pendingRowDownloads.removeAll()
         voicePlayback.tearDown()
         audioPlayback.tearDown()
         SpeechRecognizer.shared.cancel(chatId: chatId)
@@ -269,23 +290,77 @@ final class ChatHistoryStore {
     private var isLoadingNewer = false
     private var olderFailureStreak = 0
     private var newerFailureStreak = 0
-    private static let paginationLimit = 30
-    /// Most messages kept in memory while paging up (five pages).
+    /// Messages per page beyond the first window. A history request over the phone's
+    /// Bluetooth proxy costs 1–1.5s whatever its size, so pages are larger than the first
+    /// window (which stays small to open the chat fast).
+    private static let paginationLimit = 50
+    /// Most messages kept in memory while paging up (three pages).
     private static let windowLimit = 150
     private static let failureStreakCap = 3
 
-    /// Loads the page above the window. `beforeApply` runs once the page has arrived and
-    /// before it's shown: the list waits there for the scroll to come to rest, because a
-    /// prepend during momentum isn't offset-compensated and throws the content around.
+    /// The page above the window, requested ahead of time (`prefetchOlder`) so it's in
+    /// memory by the time the user scrolls to the top edge. Keyed by the window's lowest
+    /// id when it was requested: a page for an older window edge is never applied.
+    private var olderPrefetch: (from: Int64, task: Task<[Message], Error>)?
+
+    /// Starts loading the page above the window, if it isn't loading yet. Called after
+    /// the first window and after each older page goes in: reading up a chat then never
+    /// waits for the network, unless it pages faster than one round trip.
+    func prefetchOlder() {
+        guard window.hasOlder, olderFailureStreak == 0, let from = window.loadedLowestId else { return }
+        _ = olderPage(from: from)
+    }
+
+    private func olderPage(from: Int64) -> Task<[Message], Error> {
+        if let prefetch = olderPrefetch, prefetch.from == from { return prefetch.task }
+        olderPrefetch?.task.cancel()
+        let loader = self.loader
+        let chatId = self.chatId
+        let task = Task {
+            try await loader.loadHistory(chatId: chatId, fromMessageId: from, offset: 0, limit: Self.paginationLimit)
+        }
+        olderPrefetch = (from, task)
+        return task
+    }
+
+    private func dropOlderPrefetch() {
+        olderPrefetch?.task.cancel()
+        olderPrefetch = nil
+    }
+
+    /// Loads the page above the window (or takes the prefetched one). `beforeApply` runs
+    /// once the page has arrived and before it's shown: the list waits there for the
+    /// scroll to come to rest, because a prepend during momentum isn't offset-compensated
+    /// and throws the content around.
     func loadOlder(beforeApply: @MainActor () async -> Void = {}) async {
         guard !isLoadingOlder, window.hasOlder, let from = window.loadedLowestId else { return }
         isLoadingOlder = true
         defer { isLoadingOlder = false }
         do {
-            let messages = try await loader.loadHistory(
-                chatId: chatId, fromMessageId: from, offset: 0, limit: Self.paginationLimit
-            )
+            #if DEBUG
+            let fetchStart = PerfBench.shared?.now() ?? 0
+            #endif
+            let prefetched = olderPrefetch?.from == from
+            var messages: [Message]
+            do {
+                messages = try await olderPage(from: from).value
+            } catch where prefetched && !(error is CancellationError) {
+                // A prefetch that failed a while ago: try once more now.
+                olderPrefetch = nil
+                messages = try await olderPage(from: from).value
+            }
+            if olderPrefetch?.from == from { olderPrefetch = nil }
+            // The window was rebuilt (a jump) while the page loaded: it no longer fits.
+            guard window.loadedLowestId == from else { return }
+            #if DEBUG
+            let bench = PerfBench.shared
+            let fetched = bench?.now() ?? 0
+            let page = bench?.pageFetched("older", fetchMs: fetched - fetchStart, count: messages.count)
+            #endif
             await beforeApply()
+            #if DEBUG
+            let applyStart = bench?.now() ?? 0
+            #endif
             for m in messages { primeFiles(from: m.content) }
             window.extendOlder(messages.map(CachedMessage.init))
             // The dropped newest rows sit far below the viewport, so this doesn't move
@@ -298,7 +373,14 @@ final class ChatHistoryStore {
             olderFailureStreak = 0
             logger.info("loadOlder chatId=\(self.chatId, privacy: .public) returned=\(messages.count, privacy: .public)")
             reproject()
+            prefetchOlder()
+            #if DEBUG
+            if let bench, let page {
+                bench.pageApplied(page, waitMs: applyStart - fetched, applyMs: bench.now() - applyStart)
+            }
+            #endif
         } catch {
+            if olderPrefetch?.from == from { olderPrefetch = nil }
             olderFailureStreak += 1
             logger.warning("loadOlder failure streak=\(self.olderFailureStreak, privacy: .public): \(error.localizedDescription, privacy: .public)")
             if olderFailureStreak >= Self.failureStreakCap {
@@ -313,13 +395,24 @@ final class ChatHistoryStore {
         isLoadingNewer = true
         defer { isLoadingNewer = false }
         do {
+            #if DEBUG
+            let fetchStart = PerfBench.shared?.now() ?? 0
+            #endif
             let messages = try await loader.loadHistory(
                 chatId: chatId, fromMessageId: from, offset: -Self.paginationLimit, limit: Self.paginationLimit
             )
+            #if DEBUG
+            let bench = PerfBench.shared
+            let applyStart = bench?.now() ?? 0
+            let page = bench?.pageFetched("newer", fetchMs: applyStart - fetchStart, count: messages.count)
+            #endif
             for m in messages { primeFiles(from: m.content) }
             window.extendNewer(messages.map(CachedMessage.init), chatTailId: chatTailIdAtOpen)
             newerFailureStreak = 0
             reproject()
+            #if DEBUG
+            if let bench, let page { bench.pageApplied(page, waitMs: 0, applyMs: bench.now() - applyStart) }
+            #endif
         } catch {
             newerFailureStreak += 1
             logger.warning("loadNewer failure streak=\(self.newerFailureStreak, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -382,11 +475,13 @@ final class ChatHistoryStore {
 
         // Rebuild window with anchor=.tail and no divider.
         let previous = window
+        dropOlderPrefetch()
         window = MessageWindow(anchor: .tail, halfLimit: Self.halfLimit, unreadDividerAfterId: nil)
 
         do {
             try await loadInitialWindow()
             unseenNewerCount = 0
+            prefetchOlder()
         } catch {
             logger.warning("jumpToBottom failed: \(String(describing: error), privacy: .public)")
             window = previous
@@ -408,6 +503,7 @@ final class ChatHistoryStore {
         defer { isLoading = false }
 
         let previous = window
+        dropOlderPrefetch()
         window = MessageWindow(
             anchor: .messageId(messageId),
             halfLimit: Self.halfLimit,
@@ -425,6 +521,7 @@ final class ChatHistoryStore {
             return false
         }
         unseenNewerCount = 0
+        prefetchOlder()
         return true
     }
 
@@ -625,7 +722,134 @@ final class ChatHistoryStore {
 
     func fileSnapshot(fileId: Int) -> File? { files[fileId] }
 
+    // MARK: - Downloads for rows on screen
+
+    /// Downloads started because their row came on screen (`fileRowAppeared`).
+    private var rowDownloads: Set<Int> = []
+    /// Downloads asked for explicitly (playing, opening a viewer): a row leaving the
+    /// screen doesn't cancel them.
+    private var pinnedDownloads: Set<Int> = []
+    /// A row's download about to start, or about to be cancelled.
+    private var pendingRowDownloads: [Int: Task<Void, Never>] = [:]
+    /// How long a row has to stay on screen before its file downloads: rows a flick
+    /// passes over don't take TDLib's download slots from the ones it stops on.
+    private static let rowDownloadDelayNs: UInt64 = 150_000_000
+    /// How long a row has to stay off screen before its download is cancelled: scrolling
+    /// back and forth keeps it going instead of cancelling and restarting it.
+    private static let rowCancelDelayNs: UInt64 = 4_000_000_000
+
+    /// TDLib download priorities (1–32, higher first). Files the user asked for (playing,
+    /// a viewer) beat files of rows on screen, which beat files fetched ahead of the scroll.
+    static let userPriority = 24
+    static let rowPriority = 8
+    static let prefetchPriority = 1
+
+    /// A row showing this file came on screen.
+    func fileRowAppeared(_ fileId: Int) {
+        #if DEBUG
+        PerfBench.shared?.mediaShown(ready: files[fileId]?.local.isDownloadingCompleted == true)
+        #endif
+        pendingRowDownloads.removeValue(forKey: fileId)?.cancel()
+        guard !rowDownloads.contains(fileId),
+              files[fileId]?.local.isDownloadingCompleted != true else { return }
+        // Fetched ahead and still coming: the row takes it over now (no settle delay,
+        // it's downloading anyway) at the on-screen priority.
+        if let i = prefetchedFiles.firstIndex(of: fileId) {
+            prefetchedFiles.remove(at: i)
+            rowDownloads.insert(fileId)
+            startDownload(fileId: fileId, priority: Self.rowPriority)
+            return
+        }
+        pendingRowDownloads[fileId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.rowDownloadDelayNs)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingRowDownloads[fileId] = nil
+            self.rowDownloads.insert(fileId)
+            // Raises the priority of a file already fetched ahead, too.
+            self.startDownload(fileId: fileId, priority: Self.rowPriority)
+        }
+    }
+
+    // MARK: - Fetching ahead of the scroll
+
+    /// Image files requested ahead of the rows coming on screen, oldest request first.
+    private var prefetchedFiles: [Int] = []
+    /// Media rows ahead of the one that just came on screen whose images are fetched,
+    /// looking at most `prefetchRowSpan` rows ahead.
+    private static let prefetchMediaRows = 4
+    private static let prefetchRowSpan = 12
+    /// Fetches ahead kept going at once; past this the oldest are cancelled. (Cancelling
+    /// every one that fell out of the look-ahead churned: scrolling back and forth, or a
+    /// row just about to take its file over, restarted downloads.)
+    private static let prefetchLimit = 8
+
+    /// A row came on screen while scrolling `upward` (toward older messages) or down:
+    /// fetches the images of the next few media rows in that direction at the lowest
+    /// priority, and decodes them when they arrive, so they're ready when they come on
+    /// screen. Earlier prefetches no longer ahead are cancelled.
+    func prefetchMedia(near rowId: String, upward: Bool) {
+        #if DEBUG
+        if PerfBench.shared?.config.noMediaPrefetch == true { return }
+        #endif
+        guard let index = rows.firstIndex(where: { $0.id == rowId }) else { return }
+        var wanted: [Int] = []
+        var mediaRows = 0
+        var i = index
+        for _ in 0..<Self.prefetchRowSpan {
+            i += upward ? -1 : 1
+            guard rows.indices.contains(i), mediaRows < Self.prefetchMediaRows else { break }
+            guard case .bubble(let bubble) = rows[i] else { continue }
+            let images = bubble.screenFiles.filter(\.isImage).map(\.id)
+            guard !images.isEmpty else { continue }
+            mediaRows += 1
+            wanted += images.filter { files[$0]?.local.isDownloadingCompleted != true }
+        }
+        for fileId in wanted where !prefetchedFiles.contains(fileId) && !rowDownloads.contains(fileId)
+            && pendingRowDownloads[fileId] == nil && !pinnedDownloads.contains(fileId) {
+            startDownload(fileId: fileId, priority: Self.prefetchPriority)
+            prefetchedFiles.append(fileId)
+        }
+        // Finished ones need no slot.
+        prefetchedFiles.removeAll { files[$0]?.local.isDownloadingCompleted == true }
+        while prefetchedFiles.count > Self.prefetchLimit {
+            let oldest = prefetchedFiles.removeFirst()
+            guard !rowDownloads.contains(oldest), pendingRowDownloads[oldest] == nil,
+                  !pinnedDownloads.contains(oldest) else { continue }
+            cancelFileDownload(fileId: oldest)
+        }
+    }
+
+    /// Decodes a fetched-ahead image as soon as it's on disk.
+    private func predecodeIfPrefetched(_ file: File) {
+        guard prefetchedFiles.contains(file.id), file.local.isDownloadingCompleted,
+              !file.local.path.isEmpty else { return }
+        let path = file.local.path
+        Task { _ = await DecodedImageCache.loadImage(atPath: path, maxPixelSize: DecodeSize.bubble) }
+    }
+
+    /// A row showing this file left the screen.
+    func fileRowDisappeared(_ fileId: Int) {
+        pendingRowDownloads.removeValue(forKey: fileId)?.cancel()
+        guard rowDownloads.contains(fileId) else { return }
+        pendingRowDownloads[fileId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.rowCancelDelayNs)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingRowDownloads[fileId] = nil
+            self.rowDownloads.remove(fileId)
+            guard !self.pinnedDownloads.contains(fileId),
+                  self.files[fileId]?.local.isDownloadingCompleted != true else { return }
+            self.cancelFileDownload(fileId: fileId)
+        }
+    }
+
+    /// An explicit download (playing, a viewer, the avatar): rows leaving the screen and
+    /// prefetches moving on don't cancel it.
     func requestFileDownload(fileId: Int, priority: Int = 1) {
+        pinnedDownloads.insert(fileId)
+        startDownload(fileId: fileId, priority: priority)
+    }
+
+    private func startDownload(fileId: Int, priority: Int) {
         trackedFileIds.insert(fileId)
         logger.info("requestFileDownload fileId=\(fileId, privacy: .public) priority=\(priority, privacy: .public)")
         Task { [logger, loader] in
@@ -640,7 +864,7 @@ final class ChatHistoryStore {
     func togglePlayback(_ note: VoiceNoteVisual) {
         audioPlayback.tearDown()
         if note.localPath == nil {
-            requestFileDownload(fileId: note.voiceFileId, priority: 2)
+            requestFileDownload(fileId: note.voiceFileId, priority: Self.userPriority)
         }
         voicePlayback.toggle(note: note)
     }
@@ -677,13 +901,16 @@ final class ChatHistoryStore {
     func toggleAudioPlayback(_ audio: AudioVisual) {
         voicePlayback.tearDown()
         if audio.localPath == nil {
-            requestFileDownload(fileId: audio.audioFileId, priority: 2)
+            requestFileDownload(fileId: audio.audioFileId, priority: Self.userPriority)
         }
         audioPlayback.toggle(audio: audio)
     }
 
     func cancelFileDownload(fileId: Int) {
         trackedFileIds.remove(fileId)
+        pinnedDownloads.remove(fileId)
+        rowDownloads.remove(fileId)
+        prefetchedFiles.removeAll { $0 == fileId }
         logger.info("cancelFileDownload fileId=\(fileId, privacy: .public)")
         Task { [logger, loader] in
             do {
@@ -737,6 +964,11 @@ final class ChatHistoryStore {
             let previous = files[upd.file.id]
             guard previous != nil || trackedFileIds.contains(upd.file.id) else { return }
             files[upd.file.id] = upd.file
+            if previous?.local.isDownloadingCompleted != upd.file.local.isDownloadingCompleted
+                || previous?.local.path != upd.file.local.path {
+                fileChanged(upd.file.id)
+            }
+            predecodeIfPrefetched(upd.file)
             // Rows only show finished files, so progress ticks don't need a reprojection
             // of the whole history; viewers that show progress read `fileSnapshot`.
             guard trackedFileIds.contains(upd.file.id),
@@ -787,8 +1019,13 @@ final class ChatHistoryStore {
     }
 
     private func primeFile(_ file: File) {
-        if files[file.id]?.local.isDownloadingCompleted == true { return }
+        let previous = files[file.id]
+        if previous?.local.isDownloadingCompleted == true { return }
         files[file.id] = file
+        if let previous, previous.local.isDownloadingCompleted != file.local.isDownloadingCompleted
+            || previous.local.path != file.local.path {
+            fileChanged(file.id)
+        }
     }
 
     /// See `ChatListStore.scheduleReproject`. Tail-of-runloop deferral for
@@ -815,12 +1052,116 @@ final class ChatHistoryStore {
     }
     #endif
 
-    private func reproject() {
-        reprojectPending = false
+    // MARK: - Row projection
+
+    /// A message's projected row and what it was projected from.
+    private struct RowCacheEntry {
+        let message: CachedMessage
+        /// The replied-to / pinned message as it was then (`rowTargetId`).
+        let target: CachedMessage?
+        let isUnreadOutgoing: Bool
+        let row: MessageRow
+    }
+
+    /// Rows by message id, reused while nothing they depend on changed: projecting every
+    /// message on every update (a reaction, one downloaded photo) was the list's main
+    /// main-thread cost. Names changing drops all of it; files drop their messages' rows.
+    private var rowCache: [Int64: RowCacheEntry] = [:]
+    private var rowCacheNamesGeneration = -1
+    /// Messages whose rows must be projected again (a file of theirs changed).
+    private var staleRowIds: Set<Int64> = []
+    /// Which messages show each file, from the files their content carries.
+    private var fileOwners: [Int: Set<Int64>] = [:]
+
+    /// A file's download finished or moved: the rows showing it are stale. A file no
+    /// known message carries makes every row stale (safe, and rare).
+    private func fileChanged(_ fileId: Int) {
+        if let owners = fileOwners[fileId], !owners.isEmpty {
+            staleRowIds.formUnion(owners)
+        } else {
+            rowCache.removeAll()
+        }
+    }
+
+    private func noteFileOwners(_ message: CachedMessage) {
+        for fileId in fileIds(in: message.content) {
+            fileOwners[fileId, default: []].insert(message.id)
+        }
+    }
+
+    /// Projects the window into rows, reusing cached rows. `changed` is false when the
+    /// result equals the current `rows`.
+    private func projectRows() -> (rows: [MessageRow], changed: Bool) {
+        if rowCacheNamesGeneration != userNames.generation {
+            rowCache.removeAll()
+            rowCacheNamesGeneration = userNames.generation
+        }
+        let sorted = window.cache.values.sorted { $0.id < $1.id }
+        let context = MessageRowContext(
+            userNames: userNames.names,
+            fileLocals: files,
+            chatType: chatType,
+            chatId: chatId,
+            selfUserId: selfUserId,
+            lastReadOutboxMessageId: lastReadOutboxMessageId,
+            messageCache: window.cache
+        )
+        var changed = false
+        var recomputed = 0
+        let cacheWasEmpty = rowCache.isEmpty
         #if DEBUG
-        debugReprojectCount += 1
+        let t0 = PerfBench.shared?.now() ?? 0
         #endif
-        let newRows = messageRows(
+        var fresh: [Int64: RowCacheEntry] = [:]
+        fresh.reserveCapacity(sorted.count)
+        let newRows = interleaveRows(
+            sorted: sorted,
+            today: Foundation.Date(),
+            calendar: Calendar.current,
+            unreadDividerAfterId: window.unreadDividerAfterId
+        ) { msg in
+            let target = msg.rowTargetId(chatId: chatId).flatMap { window.cache[$0] }
+            let unread = msg.isUnreadOutgoing(context: context)
+            if let entry = rowCache[msg.id], !staleRowIds.contains(msg.id),
+               entry.isUnreadOutgoing == unread, entry.target == target, entry.message == msg {
+                fresh[msg.id] = entry
+                return entry.row
+            }
+            let row = messageRow(for: msg, context: context)
+            recomputed += 1
+            if rowCache[msg.id]?.row != row { changed = true }
+            if rowCache[msg.id]?.message != msg { noteFileOwners(msg) }
+            fresh[msg.id] = RowCacheEntry(message: msg, target: target, isUnreadOutgoing: unread, row: row)
+            return row
+        }
+        #if DEBUG
+        let t1 = PerfBench.shared?.now() ?? 0
+        #endif
+        rowCache = fresh
+        staleRowIds.removeAll()
+        // Same messages and same rows: only separators can differ (a day turned over).
+        if !changed {
+            changed = newRows.count != rows.count || zip(newRows, rows).contains { new, old in
+                switch (new, old) {
+                case (.bubble, .bubble), (.service, .service): return new.id != old.id
+                default: return new != old
+                }
+            }
+        }
+        #if DEBUG
+        if let bench = PerfBench.shared, bench.now() - t0 > 30 {
+            bench.note(String(format: "slow projection %.0fms (rows %.0fms) messages=%d recomputed=%d cacheWasEmpty=%@",
+                              bench.now() - t0, t1 - t0, sorted.count, recomputed, cacheWasEmpty ? "yes" : "no"))
+        }
+        #endif
+        return (newRows, changed)
+    }
+
+    #if DEBUG
+    /// Perf bench only: checks the cached projection against a full one.
+    private func verifyProjection(_ cached: [MessageRow]) {
+        guard let bench = PerfBench.shared else { return }
+        let full = messageRows(
             messages: Array(window.cache.values),
             userNames: userNames.names,
             fileLocals: files,
@@ -832,9 +1173,29 @@ final class ChatHistoryStore {
             unreadDividerAfterId: window.unreadDividerAfterId,
             lastReadOutboxMessageId: lastReadOutboxMessageId
         )
+        if full != cached {
+            let first = zip(full, cached).first { $0 != $1 }
+            bench.note("PROJECTION MISMATCH rows=\(full.count)/\(cached.count) at=\(first?.0.id ?? "count")")
+        }
+    }
+    #endif
+
+    private func reproject() {
+        reprojectPending = false
+        #if DEBUG
+        debugReprojectCount += 1
+        let benchStart = PerfBench.shared?.now()
+        #endif
+        let (newRows, changed) = projectRows()
+        #if DEBUG
+        if let bench = PerfBench.shared, let benchStart {
+            bench.reproject(ms: bench.now() - benchStart, rows: newRows.count)
+            verifyProjection(newRows)
+        }
+        #endif
         // Many updates (a user's name, a file for a row out of the window) project to
         // the same rows; assigning anyway would re-render the whole list.
-        if newRows != rows { rows = newRows }
+        if changed { rows = newRows }
         // If a voice playback is awaiting its file, advance it now that the
         // projection has the freshest `localPath`.
         if case .preparing(let pendingId, _) = voicePlayback.state {

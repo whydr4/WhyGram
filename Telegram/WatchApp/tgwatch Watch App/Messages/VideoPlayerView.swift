@@ -120,7 +120,7 @@ struct VideoPlayerView: View {
                     .multilineTextAlignment(.center)
                 Button("Retry") {
                     phase = .preparing(progress: 0)
-                    store.requestFileDownload(fileId: video.videoFileId, priority: 2)
+                    store.requestFileDownload(fileId: video.videoFileId, priority: ChatHistoryStore.userPriority)
                     // If the file is already complete on disk, no further updateFile
                     // will arrive — short-circuit by re-handling the current snapshot
                     // so setupPlayer fires immediately.
@@ -154,7 +154,7 @@ struct VideoPlayerView: View {
         if let snap = store.fileSnapshot(fileId: video.videoFileId) {
             handleSnapshot(snap)
         }
-        store.requestFileDownload(fileId: video.videoFileId, priority: 2)
+        store.requestFileDownload(fileId: video.videoFileId, priority: ChatHistoryStore.userPriority)
     }
 
     private func onDisappear() {

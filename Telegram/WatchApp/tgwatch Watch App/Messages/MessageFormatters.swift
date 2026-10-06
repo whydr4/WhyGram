@@ -120,13 +120,48 @@ func daySeparatorLabel(
     if dayDiff == 0 { return "Today" }
     if dayDiff == 1 { return "Yesterday" }
 
-    let formatter = DateFormatter()
-    formatter.calendar = calendar
-    formatter.locale = locale
-    if dayDiff >= 2 && dayDiff <= 6 {
-        formatter.dateFormat = "EEEE"   // "Sunday", "Monday", …
-    } else {
-        formatter.dateFormat = "MMM d"  // "May 5", "Dec 31"
+    // "Sunday", "Monday", … / "May 5", "Dec 31"
+    let format = dayDiff >= 2 && dayDiff <= 6 ? "EEEE" : "MMM d"
+    return FormatterCache.dateFormatter(calendar: calendar, locale: locale, key: format) {
+        $0.dateFormat = format
+    }.string(from: date)
+}
+
+/// Shared formatters. Creating a `DateFormatter` is one of Foundation's most expensive
+/// calls, and the history and chat list projections used to create one per day
+/// separator / chat row on every update. Formatting with a shared one is thread-safe.
+enum FormatterCache {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var dateFormatters: [String: DateFormatter] = [:]
+    nonisolated(unsafe) private static var numberFormatters: [String: NumberFormatter] = [:]
+
+    /// The formatter for this calendar, locale and `key` (which names what `configure`
+    /// sets up), made on first use.
+    static func dateFormatter(
+        calendar: Calendar,
+        locale: Locale,
+        key: String,
+        configure: (DateFormatter) -> Void
+    ) -> DateFormatter {
+        let id = "\(calendar.identifier)|\(calendar.timeZone.identifier)|\(locale.identifier)|\(key)"
+        lock.lock(); defer { lock.unlock() }
+        if let f = dateFormatters[id] { return f }
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.locale = locale
+        f.timeZone = calendar.timeZone
+        configure(f)
+        dateFormatters[id] = f
+        return f
     }
-    return formatter.string(from: date)
+
+    static func currencyFormatter(_ currency: String) -> NumberFormatter {
+        lock.lock(); defer { lock.unlock() }
+        if let f = numberFormatters[currency] { return f }
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = currency
+        numberFormatters[currency] = f
+        return f
+    }
 }

@@ -15,21 +15,17 @@ func chatListTimestamp(_ unixSeconds: Int, now: Date, calendar: Calendar = .curr
 
     switch dayDiff {
     case ...0:
-        return formatted(date, calendar: calendar) { $0.dateStyle = .none; $0.timeStyle = .short }
+        return formatted(date, calendar: calendar, key: "time") { $0.dateStyle = .none; $0.timeStyle = .short }
     case 1:
         return "Yesterday"
     case 2...6:
-        return formatted(date, calendar: calendar) { $0.setLocalizedDateFormatFromTemplate("EEE") }
+        return formatted(date, calendar: calendar, key: "weekday") { $0.setLocalizedDateFormatFromTemplate("EEE") }
     default:
-        return formatted(date, calendar: calendar) { $0.dateStyle = .short; $0.timeStyle = .none }
+        return formatted(date, calendar: calendar, key: "date") { $0.dateStyle = .short; $0.timeStyle = .none }
     }
 }
 
-private func formatted(_ date: Date, calendar: Calendar, _ configure: (DateFormatter) -> Void) -> String {
-    let f = DateFormatter()
-    f.calendar = calendar
-    f.locale = calendar.locale ?? .current
-    f.timeZone = calendar.timeZone
-    configure(f)
-    return f.string(from: date)
+private func formatted(_ date: Date, calendar: Calendar, key: String, _ configure: (DateFormatter) -> Void) -> String {
+    FormatterCache.dateFormatter(calendar: calendar, locale: calendar.locale ?? .current, key: key, configure: configure)
+        .string(from: date)
 }

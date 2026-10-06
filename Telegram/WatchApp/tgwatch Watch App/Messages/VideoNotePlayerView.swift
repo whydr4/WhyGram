@@ -43,7 +43,7 @@ struct VideoNotePlayerView: View {
                 setupPlayer(path: path)
                 phase = .playing
             } else {
-                store.requestFileDownload(fileId: note.videoFileId, priority: 2)
+                store.requestFileDownload(fileId: note.videoFileId, priority: ChatHistoryStore.userPriority)
             }
         }
         .onChange(of: store.fileSnapshot(fileId: note.videoFileId)) { _, snap in
@@ -121,7 +121,7 @@ struct VideoNotePlayerView: View {
                     .multilineTextAlignment(.center)
                 Button("Retry") {
                     phase = .preparing(progress: 0)
-                    store.requestFileDownload(fileId: note.videoFileId, priority: 2)
+                    store.requestFileDownload(fileId: note.videoFileId, priority: ChatHistoryStore.userPriority)
                 }
                 .buttonStyle(.borderedProminent)
             }

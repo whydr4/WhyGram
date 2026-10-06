@@ -61,6 +61,39 @@ enum DecodedImageCache {
         return image
     }
 
+    private static let blurred: NSCache<NSData, UIImage> = {
+        let cache = NSCache<NSData, UIImage>()
+        cache.totalCostLimit = 2 * 1024 * 1024
+        return cache
+    }()
+
+    /// A minithumbnail with the blur its placeholder shows, drawn once and kept: a live
+    /// `.blur` on the upscaled thumbnail is an extra render pass on every frame the row
+    /// is on screen, scrolling included. `displayWidth` and `radius` are in points as
+    /// shown; the blur is drawn at about the thumbnail's own scale, which upscaling then
+    /// smooths the same way.
+    static func blurredImage(data: Data, displayWidth: CGFloat, radius: CGFloat) -> UIImage? {
+        guard let image = image(data: data), image.size.width > 0 else { return nil }
+        let width = min(96, max(16, displayWidth * 2))
+        // Keyed by the bytes themselves (as `byData`): minithumbnails share their JPEG
+        // headers, so anything hashing a prefix would mix them up.
+        var keyData = data
+        keyData.append(contentsOf: Array("|\(Int(width))|\(radius)".utf8))
+        let key = keyData as NSData
+        if let hit = blurred.object(forKey: key) { return hit }
+        let height = width * image.size.height / image.size.width
+        let content = Image(uiImage: image)
+            .resizable()
+            .frame(width: width, height: height)
+            .blur(radius: radius * width / displayWidth)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 1
+        guard let cgImage = renderer.cgImage else { return image }
+        let result = UIImage(cgImage: cgImage)
+        blurred.setObject(result, forKey: key, cost: cost(of: result))
+        return result
+    }
+
     private static func key(_ path: String, _ maxPixelSize: Int) -> String {
         "\(maxPixelSize)|\(path)"
     }

@@ -45,9 +45,6 @@ struct StickerBubbleView: View {
                 .frame(maxWidth: metrics.stickerReplyCardMaxWidth)
             }
             stickerBody
-                .onScrollVisibilityChange(threshold: 0.01) { visible in
-                    handleVisibility(visible)
-                }
         }
     }
 
@@ -101,30 +98,6 @@ struct StickerBubbleView: View {
         return CGSize(width: w * scale, height: h * scale)
     }
 
-    private func handleVisibility(_ visible: Bool) {
-        switch sticker.format {
-        case .unsupported:
-            // The body can't be rendered; only fetch the still thumbnail, if any.
-            guard let thumbId = sticker.thumbnailFileId else { return }
-            if visible {
-                store.requestFileDownload(fileId: thumbId)
-            } else {
-                store.cancelFileDownload(fileId: thumbId)
-            }
-        case .webp, .tgs:
-            if visible {
-                store.requestFileDownload(fileId: sticker.fileId)
-                if let thumbId = sticker.thumbnailFileId {
-                    store.requestFileDownload(fileId: thumbId)
-                }
-            } else {
-                store.cancelFileDownload(fileId: sticker.fileId)
-                if let thumbId = sticker.thumbnailFileId {
-                    store.cancelFileDownload(fileId: thumbId)
-                }
-            }
-        }
-    }
 }
 
 #if DEBUG

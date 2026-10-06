@@ -75,6 +75,7 @@
 		9FC324F2FEBBDF3C24360CA3 /* LocationBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596AF8BF88C38D2018397A33 /* LocationBubbleView.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E03 /* DebugTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */; };
+		D1CA0E1A6E5B4C2F9A7B3E0D /* PerfBench.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E0E /* PerfBench.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E09 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E0B /* UIGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E0C /* UIGalleryView.swift */; };
 		D1CA0E1A6E5B4C2F9A7B3E07 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */; };
@@ -179,6 +180,7 @@
 		72755AB1D5DB932DDC3CE2D3 /* SampleStickers */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SampleStickers; path = Assets/SampleStickers; sourceTree = SOURCE_ROOT; };
 		D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedImageCache.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTrace.swift; sourceTree = "<group>"; };
+		D1CA0E1A6E5B4C2F9A7B3E0E /* PerfBench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfBench.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E0C /* UIGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIGalleryView.swift; sourceTree = "<group>"; };
 		D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
@@ -385,6 +387,7 @@
 				DF0F4F15CB43635717B31B92 /* PollVoteView.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E02 /* DecodedImageCache.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E04 /* DebugTrace.swift */,
+				D1CA0E1A6E5B4C2F9A7B3E0E /* PerfBench.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E0A /* SettingsView.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E0C /* UIGalleryView.swift */,
 				D1CA0E1A6E5B4C2F9A7B3E08 /* SpeechRecognizer.swift */,
@@ -602,6 +605,7 @@
 				B9F6D473AA0F1DAF77799E77 /* QrLoginView.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E01 /* DecodedImageCache.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E03 /* DebugTrace.swift in Sources */,
+				D1CA0E1A6E5B4C2F9A7B3E0D /* PerfBench.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E09 /* SettingsView.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E0B /* UIGalleryView.swift in Sources */,
 				D1CA0E1A6E5B4C2F9A7B3E07 /* SpeechRecognizer.swift in Sources */,

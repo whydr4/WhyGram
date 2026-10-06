@@ -44,9 +44,7 @@ private func autoDeleteDuration(seconds: Int) -> String {
 /// `amount` is in the currency's smallest unit, as TDLib sends it.
 private func moneyLabel(_ amount: Int64, currency: String) -> String {
     if currency == "XTR" { return "\(amount) ⭐️" }
-    let f = NumberFormatter()
-    f.numberStyle = .currency
-    f.currencyCode = currency
+    let f = FormatterCache.currencyFormatter(currency)
     let divisor = pow(10, Double(f.maximumFractionDigits))
     return f.string(from: NSNumber(value: Double(amount) / divisor)) ?? "\(amount) \(currency)"
 }

@@ -268,6 +268,9 @@ public enum ForkUpdate: Decodable {
         case updateChatIsMarkedAsUnread
     }
 
+    /// Whether updates of this `@type` decode to something other than `.other`.
+    public static func handles(type: String) -> Bool { Kind(rawValue: type) != nil }
+
     private enum CodingKeys: String, CodingKey {
         case type = "@type"
         case chatId, messageId, interactionInfo, unreadMentionCount, isMarkedAsUnread

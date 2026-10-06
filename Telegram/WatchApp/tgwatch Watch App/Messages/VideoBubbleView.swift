@@ -32,14 +32,6 @@ struct VideoBubbleView: View {
         Group {
             if hasChrome { chromeBubble } else { bareVideo }
         }
-        .onScrollVisibilityChange(threshold: 0.01) { visible in
-            guard let id = video.preview.previewFileId else { return }
-            if visible {
-                store.requestFileDownload(fileId: id)
-            } else {
-                store.cancelFileDownload(fileId: id)
-            }
-        }
     }
 
     private var bareVideo: some View {
@@ -93,8 +85,8 @@ struct VideoBubbleView: View {
     @ViewBuilder
     private var imageView: some View {
         DecodedFileImage(path: video.preview.previewLocalPath, maxPixelSize: DecodeSize.bubble) {
-            if let data = video.preview.minithumbnail, let img = DecodedImageCache.image(data: data) {
-                Image(uiImage: img).resizable().scaledToFill().blur(radius: 2)
+            if let data = video.preview.minithumbnail, let img = DecodedImageCache.blurredImage(data: data, displayWidth: displaySize.width, radius: 2) {
+                Image(uiImage: img).resizable().scaledToFill()
             } else {
                 Color.gray.opacity(0.3)
             }

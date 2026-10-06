@@ -153,16 +153,13 @@ open class TDLibClientManager {
     
     private func queryResultAsync(_ result: Data) {
         self.queryQueue.async { [weak self] in
-            guard
-                let `self` = self,
-                let json = try? JSONSerialization.jsonObject(with: result, options:[]),
-                let dictionary = json as? [String:Any]
-            else {
-                return
-            }
-            
-            let clientId = dictionary["@client_id"] as? Int32 ?? 1
-            if let extraStr = dictionary["@extra"] as? String {
+            guard let `self` = self else { return }
+            // Routing needs only the top-level `@client_id`, `@extra` and `@type`; the
+            // receiver decodes the body. (Fork: this used to parse every response and
+            // update in full with JSONSerialization first.)
+            let envelope = TDJSONEnvelope.scan(result)
+            let clientId = envelope.clientId ?? 1
+            if let extraStr = envelope.extra {
                 if let client = self.clients[clientId] {
                     client.completionHandler(extra: extraStr, result: result)
                 }
@@ -174,14 +171,15 @@ open class TDLibClientManager {
                 }
             }
             
-            if self.checkClosedUpdate(dictionary) {
+            if envelope.type == "updateAuthorizationState", self.checkClosedUpdate(result) {
                 self.clients.removeValue(forKey: clientId)
             }
         }
     }
     
-    private func checkClosedUpdate(_ dict: [String: Any]) -> Bool {
-        if let state = dict["authorization_state"] as? [String: Any],
+    private func checkClosedUpdate(_ data: Data) -> Bool {
+        if let dict = (try? JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any],
+           let state = dict["authorization_state"] as? [String: Any],
            (state["@type"] as? String) == "authorizationStateClosed" {
             return true
         }

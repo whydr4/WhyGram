@@ -14,11 +14,23 @@ import TDShim
 @Observable @MainActor
 final class UserNamesStore {
     private(set) var names: [Int64: String] = [:]
+    /// Bumped whenever a name changes, so projections can tell their names are stale
+    /// without comparing the whole dictionary.
+    @ObservationIgnored private(set) var generation = 0
 
     /// Absorbs `.updateUser` events. Other update kinds are ignored. Idempotent.
     func handle(_ update: Update) {
-        if case .updateUser(let upd) = update {
+        if case .updateUser(let upd) = update, names[upd.user.id] != upd.user.firstName {
             names[upd.user.id] = upd.user.firstName
+            generation += 1
         }
     }
+
+    #if DEBUG
+    /// Perf bench / previews: names for made-up users.
+    func debugSeed(_ seed: [Int64: String]) {
+        names.merge(seed) { _, new in new }
+        generation += 1
+    }
+    #endif
 }

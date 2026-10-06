@@ -73,6 +73,35 @@ struct MessageBubble: Equatable, Hashable {
     }
 }
 
+extension MessageBubble {
+    /// A file the bubble shows; `isImage` when it's decoded into a still for the bubble.
+    struct ScreenFile: Equatable {
+        let id: Int
+        let isImage: Bool
+    }
+
+    /// The files the bubble downloads while its row is on screen (what each bubble view
+    /// used to request from its own visibility callback).
+    var screenFiles: [ScreenFile] {
+        if let sticker {
+            switch sticker.format {
+            case .webp, .tgs:
+                return [ScreenFile(id: sticker.fileId, isImage: false)]
+                    + (sticker.thumbnailFileId.map { [ScreenFile(id: $0, isImage: false)] } ?? [])
+            default:
+                // The body can't be rendered; only the still thumbnail, if any.
+                return sticker.thumbnailFileId.map { [ScreenFile(id: $0, isImage: false)] } ?? []
+            }
+        }
+        if let photo { return [ScreenFile(id: photo.fileId, isImage: true)] }
+        if let video { return video.preview.previewFileId.map { [ScreenFile(id: $0, isImage: true)] } ?? [] }
+        if let videoNote { return videoNote.thumbFileId.map { [ScreenFile(id: $0, isImage: true)] } ?? [] }
+        if let voiceNote { return [ScreenFile(id: voiceNote.voiceFileId, isImage: false)] }
+        if let audio { return [ScreenFile(id: audio.audioFileId, isImage: false)] }
+        return []
+    }
+}
+
 /// Collapses an outgoing message's delivery state into the single indicator the
 /// chat UI shows at the bubble's bottom-leading corner. Incoming messages — and
 /// outgoing messages that are sent and already read — show nothing.
@@ -116,21 +145,38 @@ func messageRows(
 ) -> [MessageRow] {
     let sorted = messages.sorted { $0.id < $1.id }
     let cacheById: [Int64: CachedMessage] = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, $0) })
+    let context = MessageRowContext(
+        userNames: userNames,
+        fileLocals: fileLocals,
+        chatType: chatType,
+        chatId: chatId,
+        selfUserId: selfUserId,
+        lastReadOutboxMessageId: lastReadOutboxMessageId,
+        messageCache: cacheById
+    )
+    return interleaveRows(
+        sorted: sorted,
+        today: today,
+        calendar: calendar,
+        locale: locale,
+        unreadDividerAfterId: unreadDividerAfterId,
+        row: { messageRow(for: $0, context: context) }
+    )
+}
 
-    // Saved Messages (a private chat with our own user id) has no recipient, so
-    // outgoing messages there are implicitly read — they never get the unread dot.
-    let isSavedMessages: Bool = {
-        guard let selfUserId, case .chatTypePrivate(let p) = chatType else { return false }
-        return p.userId == selfUserId
-    }()
-
-    let dayKeyFormatter = DateFormatter()
-    dayKeyFormatter.calendar = calendar
-    dayKeyFormatter.locale = Locale(identifier: "en_US_POSIX")
-    dayKeyFormatter.timeZone = calendar.timeZone
-    dayKeyFormatter.dateFormat = "yyyy-MM-dd"
-
+/// Lays out the history: day separators above each new day's first message, the unread
+/// divider before the first message with `id > unreadDividerAfterId`, and each
+/// message's own row from `row`. `sorted` is ascending by id.
+func interleaveRows(
+    sorted: [CachedMessage],
+    today: Foundation.Date,
+    calendar: Calendar,
+    locale: Locale = .current,
+    unreadDividerAfterId: Int64?,
+    row: (CachedMessage) -> MessageRow
+) -> [MessageRow] {
     var rows: [MessageRow] = []
+    rows.reserveCapacity(sorted.count + sorted.count / 8 + 2)
     var lastDayKey: String? = nil
     var dividerPlaced = false
 
@@ -143,58 +189,136 @@ func messageRows(
             dividerPlaced = true
         }
         let date = Foundation.Date(timeIntervalSince1970: TimeInterval(msg.date))
-        let dayKey = dayKeyFormatter.string(from: date)
+        let dayKey = dayKeyString(date, calendar: calendar)
         if dayKey != lastDayKey {
             let label = daySeparatorLabel(for: date, today: today, calendar: calendar, locale: locale)
             rows.append(.daySeparator(.init(key: dayKey, label: label)))
             lastDayKey = dayKey
         }
-        if let svc = serviceLineText(
-            msg,
-            selfUserId: selfUserId,
-            userNames: userNames,
-            messageCache: cacheById,
-            includeActor: true,
-            chatType: chatType
-        ) {
-            rows.append(.service(.init(messageId: msg.id, text: svc)))
-            continue
-        }
-        let sender = senderLabel(for: msg, chatType: chatType, userNames: userNames)
-        rows.append(.bubble(.init(
-            messageId: msg.id,
-            isOutgoing: msg.isOutgoing,
-            senderName: sender?.name,
-            body: messageBody(msg.content, isOutgoing: msg.isOutgoing),
-            photo: photoVisual(for: msg.content, fileLocals: fileLocals),
-            video: videoVisual(for: msg.content, fileLocals: fileLocals),
-            videoNote: videoNoteVisual(for: msg.content, fileLocals: fileLocals),
-            voiceNote: voiceNoteVisual(for: msg.content, fileLocals: fileLocals),
-            audio: audioVisual(for: msg.content, fileLocals: fileLocals),
-            document: documentVisual(for: msg.content, fileLocals: fileLocals),
-            sticker: stickerVisual(for: msg.content, fileLocals: fileLocals),
-            location: locationVisual(
-                for: msg.content,
-                messageDate: Foundation.Date(
-                    timeIntervalSince1970: TimeInterval(msg.editDate != 0 ? msg.editDate : msg.date)
-                )
-            ),
-            poll: pollVisual(for: msg.content),
-            sendingState: msg.sendingState,
-            replyHeader: replyPreview(
-                msg.replyTo,
-                inChatId: chatId,
-                isOutgoing: msg.isOutgoing,
-                cache: cacheById,
-                userNames: userNames
-            ),
-            senderColorIndex: sender?.colorIndex,
-            isUnreadOutgoing: !isSavedMessages && msg.isOutgoing && msg.sendingState == .sent && msg.id > lastReadOutboxMessageId,
-            isUnsupported: isUnsupportedContent(msg.content),
-            reactions: msg.reactions
-        )))
+        rows.append(row(msg))
     }
     return rows
+}
+
+/// Everything a message's row depends on besides the message itself.
+struct MessageRowContext {
+    let userNames: [Int64: String]
+    let fileLocals: [Int: File]
+    let chatType: ChatType
+    let chatId: Int64
+    let selfUserId: Int64?
+    let lastReadOutboxMessageId: Int64
+    /// The loaded messages by id: reply headers and pinned-message lines read their target.
+    let messageCache: [Int64: CachedMessage]
+
+    /// Saved Messages (a private chat with our own user id) has no recipient, so
+    /// outgoing messages there are implicitly read — they never get the unread dot.
+    var isSavedMessages: Bool {
+        guard let selfUserId, case .chatTypePrivate(let p) = chatType else { return false }
+        return p.userId == selfUserId
+    }
+}
+
+extension CachedMessage {
+    /// The message in the same chat this one's row shows part of: the replied-to
+    /// message, or the pinned one for a pin service line.
+    func rowTargetId(chatId: Int64) -> Int64? {
+        if case .messagePinMessage(let m) = content { return m.messageId }
+        if case .messageReplyToMessage(let r)? = replyTo, r.chatId == chatId { return r.messageId }
+        return nil
+    }
+
+    /// A sent outgoing message the recipient hasn't read yet (the bubble's unread dot).
+    func isUnreadOutgoing(context: MessageRowContext) -> Bool {
+        !context.isSavedMessages && isOutgoing && sendingState == .sent && id > context.lastReadOutboxMessageId
+    }
+}
+
+/// Ids of the files a message's content carries, which its row's visuals look up in
+/// the store's file snapshots. A file missing here only costs a full re-projection
+/// when it changes (see `ChatHistoryStore.fileChanged`).
+func fileIds(in content: MessageContent) -> [Int] {
+    func thumb(_ t: Thumbnail?) -> [Int] { t.map { [$0.file.id] } ?? [] }
+    switch content {
+    case .messagePhoto(let m):
+        return m.photo.sizes.map(\.photo.id)
+    case .messageVideo(let m):
+        return [m.video.video.id] + thumb(m.video.thumbnail)
+            + m.alternativeVideos.flatMap { [$0.video.id, $0.hlsFile.id] }
+            + (m.cover?.sizes.map(\.photo.id) ?? [])
+    case .messageAnimation(let m):
+        return [m.animation.animation.id] + thumb(m.animation.thumbnail)
+    case .messageVideoNote(let m):
+        return [m.videoNote.video.id] + thumb(m.videoNote.thumbnail)
+    case .messageVoiceNote(let m):
+        return [m.voiceNote.voice.id]
+    case .messageAudio(let m):
+        return [m.audio.audio.id] + thumb(m.audio.albumCoverThumbnail)
+            + m.audio.externalAlbumCovers.map(\.file.id)
+    case .messageDocument(let m):
+        return [m.document.document.id] + thumb(m.document.thumbnail)
+    case .messageSticker(let m):
+        return [m.sticker.sticker.id] + thumb(m.sticker.thumbnail)
+    default:
+        return []
+    }
+}
+
+/// One message's row: its service line, or its bubble.
+func messageRow(for msg: CachedMessage, context: MessageRowContext) -> MessageRow {
+    if let svc = serviceLineText(
+        msg,
+        selfUserId: context.selfUserId,
+        userNames: context.userNames,
+        messageCache: context.messageCache,
+        includeActor: true,
+        chatType: context.chatType
+    ) {
+        return .service(.init(messageId: msg.id, text: svc))
+    }
+    let fileLocals = context.fileLocals
+    let sender = senderLabel(for: msg, chatType: context.chatType, userNames: context.userNames)
+    return .bubble(.init(
+        messageId: msg.id,
+        isOutgoing: msg.isOutgoing,
+        senderName: sender?.name,
+        body: messageBody(msg.content, isOutgoing: msg.isOutgoing),
+        photo: photoVisual(for: msg.content, fileLocals: fileLocals),
+        video: videoVisual(for: msg.content, fileLocals: fileLocals),
+        videoNote: videoNoteVisual(for: msg.content, fileLocals: fileLocals),
+        voiceNote: voiceNoteVisual(for: msg.content, fileLocals: fileLocals),
+        audio: audioVisual(for: msg.content, fileLocals: fileLocals),
+        document: documentVisual(for: msg.content, fileLocals: fileLocals),
+        sticker: stickerVisual(for: msg.content, fileLocals: fileLocals),
+        location: locationVisual(
+            for: msg.content,
+            messageDate: Foundation.Date(
+                timeIntervalSince1970: TimeInterval(msg.editDate != 0 ? msg.editDate : msg.date)
+            )
+        ),
+        poll: pollVisual(for: msg.content),
+        sendingState: msg.sendingState,
+        replyHeader: replyPreview(
+            msg.replyTo,
+            inChatId: context.chatId,
+            isOutgoing: msg.isOutgoing,
+            cache: context.messageCache,
+            userNames: context.userNames
+        ),
+        senderColorIndex: sender?.colorIndex,
+        isUnreadOutgoing: msg.isUnreadOutgoing(context: context),
+        isUnsupported: isUnsupportedContent(msg.content),
+        reactions: msg.reactions
+    ))
+}
+
+/// `yyyy-MM-dd` of the date's day in the calendar's time zone (the day separator's row
+/// id), from date components: formatting a date string for each message was most of
+/// the projection's time.
+func dayKeyString(_ date: Foundation.Date, calendar: Calendar) -> String {
+    let c = calendar.dateComponents([.year, .month, .day], from: date)
+    let y = c.year ?? 0, m = c.month ?? 0, d = c.day ?? 0
+    return "\(y)-\(m < 10 ? "0" : "")\(m)-\(d < 10 ? "0" : "")\(d)"
 }
 
 /// Builds a `PhotoVisual` for `messagePhoto` content, or returns `nil` for any other content

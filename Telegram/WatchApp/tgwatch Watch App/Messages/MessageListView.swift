@@ -75,6 +75,11 @@ struct MessageListView: View {
 
     var body: some View {
         content(store: store)
+        #if DEBUG
+        .overlay(alignment: .topLeading) {
+            if PerfBench.shared != nil { PerfFrameMeter() }
+        }
+        #endif
         .navigationTitle(row.title)
         .accessibilityIdentifier("messageListView")
         .toolbar {
@@ -158,6 +163,12 @@ struct MessageListView: View {
             .environment(stickerPickerStore)
         }
         .task {
+            #if DEBUG
+            if let bench = PerfBench.shared, bench.config.isReal, bench.phase == "idle" {
+                PerfBench.resetOutput()
+                bench.setPhase("open")
+            }
+            #endif
             client.setActiveHistory(store)
             // Defer openChat to here (the store was warmed without it). Independent
             // of warm: if the window is still loading, openChat proceeds anyway.
@@ -246,56 +257,21 @@ struct MessageListView: View {
                         // every loaded message was laid out on each update, which made long
                         // sessions sluggish on the watch.
                         LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(store.rows.enumerated()), id: \.element.id) { idx, messageRow in
+                            ForEach(store.rows) { messageRow in
                                 MessageRowView(
                                     row: messageRow,
                                     onPhotoTap: { presentedPhoto = $0 },
                                     onVideoTap: { presentedVideo = $0 },
                                     onVideoNoteTap: { presentedVideoNote = $0 },
                                     onPollTap: { id, poll in presentedPoll = PollVoteTarget(id: id, poll: poll) },
-                                    isNearTop: idx <= 8,
-                                    isNearBottom: idx >= store.rows.count - 9,
-                                    onEnterTopEdge: {
-                                        guard userHasScrolled, canPaginate else { return }
-                                        canPaginate = false
-                                        restoreAfterPrepend = true
-                                        DebugTrace.log("loadOlder trigger row=\(messageRow.id) rows=\(store.rows.count) visible=\(visibleRows.ids.count)")
-                                        Task {
-                                            await store.loadOlder(beforeApply: {
-                                                let waited = await waitForScrollToRest()
-                                                // Where the content and the message in the middle
-                                                // of the screen were before the page goes in above
-                                                // them; see the prepend compensation.
-                                                if let v = visibleRows.viewport {
-                                                    visibleRows.prependBase = PrependBase(
-                                                        offset: v.contentOffsetY,
-                                                        size: v.contentSizeH,
-                                                        anchor: viewportAnchor()
-                                                    )
-                                                }
-                                                DebugTrace.log("loadOlder apply after \(Int(waited * 1000))ms")
-                                            })
-                                            DebugTrace.log("loadOlder done rows=\(store.rows.count)")
-                                            try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
-                                            visibleRows.prependBase = nil
-                                            restoreAfterPrepend = false
-                                            canPaginate = true
-                                        }
-                                    },
-                                    onEnterBottomEdge: {
-                                        guard userHasScrolled, canPaginate, !store.window.reachesChatTail else { return }
-                                        canPaginate = false
-                                        DebugTrace.log("loadNewer trigger row=\(messageRow.id) rows=\(store.rows.count)")
-                                        Task {
-                                            await store.loadNewer()
-                                            DebugTrace.log("loadNewer done rows=\(store.rows.count)")
-                                            try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
-                                            canPaginate = true
-                                        }
-                                    },
                                     onVisibilityChange: { id, visible in
                                         if visible {
                                             visibleRows.ids.insert(id)
+                                            // Any row coming on screen may be one of the window's
+                                            // edge rows; the checks are cheap and level-based.
+                                            loadOlderIfAtTopEdge(trigger: id)
+                                            loadNewerIfAtBottomEdge(trigger: id)
+                                            store.prefetchMedia(near: id, upward: visibleRows.scrollingUp)
                                         } else {
                                             visibleRows.ids.remove(id)
                                             visibleRows.frames[id] = nil
@@ -303,11 +279,14 @@ struct MessageListView: View {
                                     },
                                     onFrameChange: { id, frame in
                                         visibleRows.frames[id] = frame
-                                        if let base = visibleRows.prependBase, base.anchor?.rowId == id {
+                                        visibleRows.lastFrames[id] = frame
+                                        // Only once the page is in: before that the anchor's frame
+                                        // still moves with the scroll coming to rest.
+                                        if let base = visibleRows.prependBase, base.applied, base.anchor?.rowId == id {
                                             keepPrependAnchor(base, frame: frame)
                                         }
                                         #if DEBUG
-                                        visibleRows.probeRowMoved(id)
+                                        if PerfBench.shared == nil { visibleRows.probeRowMoved(id) }
                                         #endif
                                     },
                                     onIncomingBubbleVisible: { id in
@@ -381,7 +360,7 @@ struct MessageListView: View {
                     } action: { old, new in
                         visibleRows.viewport = new
                         #if DEBUG
-                        visibleRows.probeScrolled(new)
+                        if PerfBench.shared == nil { visibleRows.probeScrolled(new) }
                         #endif
                         // isAtBottom means "user intends to be parked at bottom", NOT "the
                         // bottom edge is visible right now". When a new message arrives while
@@ -396,6 +375,9 @@ struct MessageListView: View {
                         // empirically — when at the bottom, contentOffset.y ==
                         // contentSize.height - containerSize.height - contentInsets.top.
                         guard old.contentSizeH == new.contentSizeH else { return }
+                        if new.contentOffsetY != old.contentOffsetY {
+                            visibleRows.scrollingUp = new.contentOffsetY < old.contentOffsetY
+                        }
                         let bottomOffset = new.contentSizeH - new.containerSizeH - new.topInset
                         // This runs on every scroll frame: write state only when it
                         // changes, or each frame re-renders the whole list.
@@ -501,22 +483,54 @@ struct MessageListView: View {
                         // too, and the size-change anchor doesn't act here), so scroll to
                         // the message that was mid-screen by id: that builds it about where
                         // it was, and `keepPrependAnchor` fine-tunes from its real frame.
-                        if let anchor = visibleRows.prependBase?.anchor, let v = visibleRows.viewport {
-                            let span = v.containerSizeH - anchor.height
-                            // `scrollTo` lines up the same unit point of the row and of the
-                            // viewport, so the row's top lands at y * (viewport - row height).
-                            let y = abs(span) >= 1 ? min(max(anchor.top / span, -10), 10) : 0
-                            proxy.scrollTo(anchor.rowId, anchor: UnitPoint(x: 0.5, y: y))
-                            DebugTrace.log(String(format: "prepend coarse anchor=%@ top=%.1f h=%.1f unit=%.2f", anchor.rowId, anchor.top, anchor.height, y))
-                        }
-                        guard let anchor = viewportAnchor() else { return }
-                        // Diagnostics: how far the message on screen moved (it shouldn't).
+                        guard let anchor = visibleRows.prependBase?.anchor else { return }
+                        visibleRows.prependBase?.applied = true
+                        placePrependAnchor(anchor, proxy: proxy)
+                        // The scroll above sometimes doesn't take: the list keeps its old
+                        // offset when the new rows are laid out after it, and the anchor ends
+                        // up a page below the screen, where `keepPrependAnchor` (driven by
+                        // its frame) never hears of it. Check it for a few frames, and place
+                        // it again while it's off screen.
                         Task {
-                            try? await Task.sleep(nanoseconds: 50_000_000)
-                            let drift = visibleRows.frames[anchor.rowId].map { $0.minY - anchor.top }
-                            DebugTrace.log("prepend keep anchor=\(anchor.rowId) drift=\(drift.map { String(format: "%.1f", $0) } ?? "gone") visible=\(visibleRows.ids.count)")
+                            var repins = 0
+                            var placed = 0
+                            for step in 0..<20 {
+                                try? await Task.sleep(nanoseconds: 16_000_000)
+                                // The user took over, or the next page started.
+                                guard let base = visibleRows.prependBase, base.anchor?.rowId == anchor.rowId else { break }
+                                if visibleRows.isOnScreen(anchor.rowId), let frame = visibleRows.lastFrames[anchor.rowId] {
+                                    // The first frames can still carry the row's frame from
+                                    // before the scroll; trust "in place" once it holds.
+                                    if abs(frame.minY - anchor.top) < 1 {
+                                        placed += 1
+                                        if placed >= 3, step >= 5 { break }
+                                        continue
+                                    }
+                                    placed = 0
+                                    keepPrependAnchor(base, frame: frame)
+                                } else {
+                                    placePrependAnchor(anchor, proxy: proxy)
+                                    repins += 1
+                                }
+                            }
+                            // Diagnostics: how far the message on screen moved (it shouldn't).
+                            // `lastFrames`: a row that stayed put sends no new frame, and its
+                            // entry in `frames` may have been cleared by a visibility flap.
+                            let drift = visibleRows.lastFrames[anchor.rowId].map { $0.minY - anchor.top }
+                            let onScreen = visibleRows.isOnScreen(anchor.rowId)
+                            DebugTrace.log("prepend keep anchor=\(anchor.rowId) drift=\(drift.map { String(format: "%.1f", $0) } ?? "gone") onScreen=\(onScreen) repins=\(repins) visible=\(visibleRows.ids.count)")
+                            #if DEBUG
+                            if let drift { PerfBench.shared?.drift(onScreen ? Double(drift) : 999) }
+                            #endif
                         }
                     }
+                    #if DEBUG
+                    // Perf bench: once the chat is in place, scroll it by script.
+                    .task(id: didApplyInitialScroll) {
+                        guard didApplyInitialScroll, let bench = PerfBench.shared else { return }
+                        await bench.run(store: store, hooks: benchHooks(proxy: proxy))
+                    }
+                    #endif
                     .onChange(of: jumpToMentionRequest) {
                         Task {
                             guard let messageId = await store.oldestUnreadMention() else { return }
@@ -581,6 +595,116 @@ struct MessageListView: View {
                 }
             }
         }
+    }
+
+    #if DEBUG
+    /// What the perf bench drives: it scrolls by putting the row in the middle of the
+    /// screen a few points further each frame (`scrollTo` with a fractional anchor, which
+    /// writes no view state, so the bench itself doesn't re-render the list).
+    private func benchHooks(proxy: ScrollViewProxy) -> PerfBenchHooks {
+        let tracker = visibleRows
+        return PerfBenchHooks(
+            viewport: {
+                tracker.viewport.map {
+                    .init(offset: $0.contentOffsetY, contentHeight: $0.contentSizeH,
+                          containerHeight: $0.containerSizeH, topInset: $0.topInset)
+                }
+            },
+            middleRow: {
+                guard let v = tracker.viewport else { return nil }
+                let middle = v.containerSizeH / 2
+                let nearest: ([String: CGRect]) -> (String, CGRect)? = { frames in
+                    frames.min(by: { abs($0.value.midY - middle) < abs($1.value.midY - middle) })
+                        .map { ($0.key, $0.value) }
+                }
+                // Rows the visibility callbacks say are on screen; failing that, rows whose
+                // last reported frame is on screen (tall rows can miss a visibility change).
+                guard let (id, frame) = nearest(tracker.frames.filter { tracker.ids.contains($0.key) })
+                        ?? nearest(tracker.lastFrames.filter { $0.value.maxY > 0 && $0.value.minY < v.containerSizeH })
+                else { return nil }
+                return .init(id: id, top: frame.minY, height: frame.height)
+            },
+            rowTop: { tracker.frames[$0]?.minY },
+            placeRow: { id, top, height in
+                guard let v = tracker.viewport else { return }
+                let span = v.containerSizeH - height
+                let y = abs(span) >= 1 ? top / span : 0
+                proxy.scrollTo(id, anchor: UnitPoint(x: 0.5, y: y))
+            },
+            setUserScrolling: { on in
+                tracker.isScrolling = on
+                tracker.isUserScrolling = on
+                // The user taking over, as `.onScrollPhaseChange` handles it.
+                if on { tracker.prependBase = nil }
+            },
+            jumpToBottom: { jumpToBottomRequest += 1 },
+            prependInFlight: { tracker.prependBase != nil }
+        )
+    }
+    #endif
+
+    // MARK: - Paging
+
+    /// Rows at each end of the window whose coming on screen pages in more.
+    private static let edgeRows = 15
+
+    /// Whether one of the window's first (or last) `edgeRows` rows is on screen.
+    private func edgeRowVisible(top: Bool) -> Bool {
+        let rows = top ? store.rows.prefix(Self.edgeRows) : store.rows.suffix(Self.edgeRows)
+        return rows.contains { visibleRows.ids.contains($0.id) }
+    }
+
+    /// Loads the page above when the top edge rows are on screen. Checked when an edge
+    /// row comes on screen AND when the cool-down after a page ends: an edge row that
+    /// appeared during the cool-down (or a page that went in while the user sat at the
+    /// top) would otherwise leave the list stuck at the top until the user scrolled away
+    /// and back.
+    private func loadOlderIfAtTopEdge(trigger: String) {
+        guard didApplyInitialScroll, userHasScrolled, canPaginate, store.window.hasOlder,
+              edgeRowVisible(top: true) else { return }
+        canPaginate = false
+        restoreAfterPrepend = true
+        DebugTrace.log("loadOlder trigger row=\(trigger) rows=\(store.rows.count) visible=\(visibleRows.ids.count)")
+        Task {
+            await store.loadOlder(beforeApply: {
+                let waited = await waitForScrollToRest()
+                // Where the content and the message in the middle
+                // of the screen were before the page goes in above
+                // them; see the prepend compensation.
+                if let v = visibleRows.viewport {
+                    visibleRows.prependBase = PrependBase(
+                        offset: v.contentOffsetY,
+                        size: v.contentSizeH,
+                        anchor: viewportAnchor()
+                    )
+                }
+                DebugTrace.log("loadOlder apply after \(Int(waited * 1000))ms")
+            })
+            DebugTrace.log("loadOlder done rows=\(store.rows.count)")
+            try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
+            visibleRows.prependBase = nil
+            restoreAfterPrepend = false
+            endPaginationCooldown()
+        }
+    }
+
+    private func loadNewerIfAtBottomEdge(trigger: String) {
+        guard didApplyInitialScroll, userHasScrolled, canPaginate, !store.window.reachesChatTail,
+              edgeRowVisible(top: false) else { return }
+        canPaginate = false
+        DebugTrace.log("loadNewer trigger row=\(trigger) rows=\(store.rows.count)")
+        Task {
+            await store.loadNewer()
+            DebugTrace.log("loadNewer done rows=\(store.rows.count)")
+            try? await Task.sleep(nanoseconds: Self.paginationCooldownNs)
+            endPaginationCooldown()
+        }
+    }
+
+    private func endPaginationCooldown() {
+        canPaginate = true
+        loadOlderIfAtTopEdge(trigger: "recheck")
+        loadNewerIfAtBottomEdge(trigger: "recheck")
     }
 
     /// The chat isn't showing its newest messages: the user scrolled up, jumped to a
@@ -695,6 +819,21 @@ struct MessageListView: View {
         return "miss=\(fmt(missBefore))->\(fmt(missAfter)) pins=\(pins)"
     }
 
+    /// Prepend compensation, coarse step: scrolls to the message that was mid-screen by
+    /// id, which builds it about where it was even when the rows around it are only
+    /// estimated; `keepPrependAnchor` fine-tunes from its real frame.
+    private func placePrependAnchor(_ anchor: ViewportAnchor, proxy: ScrollViewProxy) {
+        guard let v = visibleRows.viewport else { return }
+        let span = v.containerSizeH - anchor.height
+        // `scrollTo` lines up the same unit point of the row and of the viewport, so the
+        // row's top lands at y * (viewport - row height). Kept within 0...1, which always
+        // leaves the row on screen: for a row that didn't fit whole the exact y is
+        // outside, and putting it there sent it off screen where the fine step can't see it.
+        let y = abs(span) >= 1 ? min(max(anchor.top / span, 0), 1) : 0
+        proxy.scrollTo(anchor.rowId, anchor: UnitPoint(x: 0.5, y: y))
+        DebugTrace.log(String(format: "prepend coarse anchor=%@ top=%.1f h=%.1f unit=%.2f", anchor.rowId, anchor.top, anchor.height, y))
+    }
+
     /// Prepend compensation, fine step: puts the anchor message back where it was on
     /// screen whenever the rows settling their real heights above it move it.
     /// `scrollTo(y:)` counts from the top edge, without the content inset.
@@ -704,17 +843,24 @@ struct MessageListView: View {
         guard abs(delta) >= 0.5 else { return }
         let target = v.contentOffsetY + delta
         // Callbacks can repeat before the scroll lands; the target is absolute, so only
-        // send a new one.
-        guard abs(target - (visibleRows.prependBase?.lastTarget ?? .nan)) >= 0.5 else { return }
+        // send a new one. (This compared against NaN when there was no previous target,
+        // which is never >= 0.5, so the fine step never ran at all.)
+        if let last = visibleRows.prependBase?.lastTarget, abs(target - last) < 0.5 { return }
         visibleRows.prependBase?.lastTarget = target
         scrollPosition.scrollTo(y: target + v.topInset)
         DebugTrace.log(String(format: "prepend fine delta=%.1f off=%.1f -> %.1f", delta, v.contentOffsetY, target))
     }
 
-    /// Waits (up to 3s) until the scroll view isn't moving. Returns the seconds waited.
+    /// Waits until the scroll view isn't moving, or has run into the top of the content
+    /// (it can't move on there, and the page above is what the user is waiting for).
+    /// Returns the seconds waited. No short cap: a page put in while the user scrolls (the
+    /// crown can keep the list moving for long) has its compensation overridden by the
+    /// user's scroll and throws the content a page off; the page is already in memory, so
+    /// waiting costs nothing. 60s only guards against a scroll phase stuck on.
     private func waitForScrollToRest() async -> Double {
         let start = Date()
-        while visibleRows.isScrolling, Date().timeIntervalSince(start) < 3 {
+        while visibleRows.isScrolling, Date().timeIntervalSince(start) < 60 {
+            if let v = visibleRows.viewport, v.contentOffsetY + v.topInset <= 1 { break }
             try? await Task.sleep(nanoseconds: 16_000_000)
         }
         return Date().timeIntervalSince(start)
@@ -742,9 +888,15 @@ struct MessageListView: View {
         if let rowId, frames[rowId] != nil {
             candidate = rowId
         } else {
-            let middle = visibleRows.viewport.map { $0.containerSizeH / 2 } ?? 0
-            candidate = store.rows
+            let container = visibleRows.viewport?.containerSizeH ?? 0
+            let middle = container / 2
+            let onScreen = store.rows
                 .filter { $0.messageId != nil && visibleRows.ids.contains($0.id) && frames[$0.id] != nil }
+            // A row that fits on screen whole: the coarse prepend step can put it back
+            // exactly (`scrollTo`'s unit anchor stays within 0...1), while a row taller
+            // than the space left lands off and the fine step may lose it.
+            let whole = onScreen.filter { frames[$0.id]!.minY >= 0 && frames[$0.id]!.maxY <= container }
+            candidate = (whole.isEmpty ? onScreen : whole)
                 .min { abs(frames[$0.id]!.midY - middle) < abs(frames[$1.id]!.midY - middle) }?
                 .id
         }
@@ -781,6 +933,8 @@ struct PrependBase {
     let size: CGFloat
     let anchor: ViewportAnchor?
     var lastTarget: CGFloat?
+    /// The page's rows are in; the compensation may move the list from here on.
+    var applied = false
 }
 
 /// A message's place on screen: its row's top edge in the scroll view's visible area.
@@ -809,11 +963,23 @@ private final class VisibleRowTracker {
     var ids: Set<String> = []
     /// Frames of built rows in the scroll view's visible area.
     var frames: [String: CGRect] = [:]
+    /// Last frame each row reported, kept when it leaves the screen (diagnostics).
+    var lastFrames: [String: CGRect] = [:]
+
+    /// The row is on screen: by its visibility callbacks, or by its last frame (a row the
+    /// lazy stack rebuilt in place after a prepend can miss its visibility callback).
+    func isOnScreen(_ id: String) -> Bool {
+        if ids.contains(id) { return true }
+        guard let frame = lastFrames[id], let v = viewport else { return false }
+        return frame.maxY > 0 && frame.minY < v.containerSizeH
+    }
     var viewport: ScrollSnapshot?
     /// Content height, polled by the settle loops to tell when rows stop resizing.
     var contentHeight: CGFloat = 0
     /// The scroll view is being dragged, decelerating or animating.
     var isScrolling = false
+    /// The last scroll went toward older messages (media ahead is fetched that way).
+    var scrollingUp = true
     /// The scroll view is moving because of the user (dragged, or decelerating after it).
     var isUserScrolling = false
     /// Offset and content height just before an older page goes in; set while the prepend
